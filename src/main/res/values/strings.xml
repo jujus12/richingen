@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="service_desc">Ekranı okuyup boss doğma sürelerini takip eder ve kayıtlı boss noktasına dokunarak gider.</string>
+</resources>
