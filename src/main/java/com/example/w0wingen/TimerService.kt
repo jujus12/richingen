@@ -716,7 +716,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun orangeAt(b: Bitmap, name: String): Boolean {
-        return orangeRatio(b, name, 1f) >= 0.12f
+        return orangeRatio(b, name, 1f) >= 0.10f
     }
 
     /** Haritanın kapat (X) düğmesi: işaretli noktada ya da çevresindeki geniş alanda turuncu var mı. */
