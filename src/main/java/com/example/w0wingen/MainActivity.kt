@@ -69,6 +69,9 @@ class MainActivity : Activity() {
     private lateinit var mapsEdit: EditText
     private lateinit var randomOn: Switch
     private lateinit var farmOn: Switch
+    private lateinit var impOn: Switch
+    private lateinit var angelOn: Switch
+    private lateinit var reviveOn: Switch
     private lateinit var buffOn: Switch
     private lateinit var potOn: Switch
     private lateinit var recycleOn: Switch
@@ -141,6 +144,9 @@ class MainActivity : Activity() {
         val farm = card(col, "Farm")
         farmOn = sw(farm, "Boss yokken farm konumuna git", "cfg_farmOn", true)
         for (f in farmFields) addField(farm, f)
+        impOn = sw(farm, "Farmda Imp düğmesine bas", "cfg_impOn", true)
+        angelOn = sw(farm, "Boss keserken Angel düğmesine bas", "cfg_angelOn", true)
+        reviveOn = sw(farm, "Ölünce Free Revival'a bas ve kaldığı işe dön", "cfg_reviveOn", true)
 
         val move = card(col, "Işınlanma ve yürüme")
         randomOn = sw(move, "Bossa giderken Random ışınlanma açık", "cfg_randomOn", true)
@@ -167,6 +173,9 @@ class MainActivity : Activity() {
             }
             e.putBoolean("cfg_randomOn", randomOn.isChecked)
             e.putBoolean("cfg_farmOn", farmOn.isChecked)
+            e.putBoolean("cfg_impOn", impOn.isChecked)
+            e.putBoolean("cfg_angelOn", angelOn.isChecked)
+            e.putBoolean("cfg_reviveOn", reviveOn.isChecked)
             e.putBoolean("cfg_buffOn", buffOn.isChecked)
             e.putBoolean("cfg_potOn", potOn.isChecked)
             e.putBoolean("cfg_recycleOn", recycleOn.isChecked)

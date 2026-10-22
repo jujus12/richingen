@@ -51,6 +51,8 @@ class TimerService : AccessibilityService() {
 
     /** Kullanıcı durdurdu. */
     private class StopEx : RuntimeException()
+    /** Ölünce Free Revival basıldı; otomasyon döngüsü kaldığı işe geri döner. */
+    private class Revived : RuntimeException()
 
     /** Bir adım başarısız oldu (mesaj zaten gösterildi). */
     private class StepFail : RuntimeException()
@@ -103,7 +105,7 @@ class TimerService : AccessibilityService() {
             "2 · Harita" to listOf("minimap", "closeMap", "random"),
             "3 · Chat" to listOf("chat", "pmTab", "closeChat"),
             "5 · Wire (sadece Raklion'lar)" to listOf("switchBtn", "wire1", "wire2", "wire3", "switchOk"),
-            "6 · Farm" to listOf("autoAtk", "shield"),
+            "6 · Farm ve savaş düğmeleri" to listOf("autoAtk", "shield", "imp", "angel", "revive"),
             "7 · Envanter, pot, Recycle" to listOf(
                 "inventory", "shopTab", "purchaseHP", "purchaseMP", "hpCount", "mpCount",
                 "recycleTab", "recycleBtn", "closeRight", "closeLeft"
@@ -132,6 +134,9 @@ class TimerService : AccessibilityService() {
             "switchOk" to "Wire seçince onay düğmesi varsa (isteğe bağlı)",
             "autoAtk" to "Sağdaki Auto (oto saldırı) düğmesi",
             "shield" to "Kalkan düğmesi (farm konumuna varınca basılır)",
+            "imp" to "Imp düğmesi (alt çubukta pot yanında, farm konumuna varınca basılır)",
+            "angel" to "Angel düğmesi (alt çubukta pot yanında, bossu keserken basılır)",
+            "revive" to "Free Revival düğmesi (isteğe bağlı: yazı okunamazsa buraya basılır; ölüm ekranı açıkken işaretle)",
             "inventory" to "Sağdaki Inventory düğmesi",
             "shopTab" to "Envanterde alttaki Shop sekmesi (Inventory açıkken)",
             "purchaseHP" to "Shop'ta 99'luk HP pot Purchase düğmesi",
@@ -178,6 +183,9 @@ class TimerService : AccessibilityService() {
             Triple("potOn", "Pot", true),
             Triple("recycleOn", "Recycle", true),
             Triple("farmOn", "Farm", true),
+            Triple("impOn", "Imp", true),
+            Triple("angelOn", "Angel", true),
+            Triple("reviveOn", "Diril", true),
             Triple("buffOn", "Buff", false),
             Triple("randomOn", "Random", true)
         )
@@ -235,6 +243,7 @@ class TimerService : AccessibilityService() {
     private var farming = false
     private var currentId = 0L
     private var kills = 0
+    private var deaths = 0
     private var fails = 0
     private var lastMaint = 0L
     private var lastPotBuy = 0L
@@ -565,7 +574,58 @@ class TimerService : AccessibilityService() {
             panel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
             handle?.visibility = View.VISIBLE
         }
+        if (b != null && autoRunning && on("reviveOn") && deathScreen(b)) revive()
         return b
+    }
+
+    /** Ölüm penceresindeki iki turuncu düğme (Free Revival, Respawn Now) görünüyor mu? Ucuz renk testi. */
+    private fun deathScreen(b: Bitmap): Boolean {
+        fun frac(x0: Float, x1: Float): Float {
+            val xa = (x0 * b.width).toInt()
+            val xb = (x1 * b.width).toInt()
+            val ya = (0.57f * b.height).toInt()
+            val yb = (0.60f * b.height).toInt()
+            var hit = 0
+            var tot = 0
+            var y = ya
+            while (y < yb) {
+                var x = xa
+                while (x < xb) {
+                    tot++
+                    if (isOrange(b.getPixel(x, y))) hit++
+                    x += 3
+                }
+                y += 3
+            }
+            return if (tot == 0) 0f else hit.toFloat() / tot
+        }
+        return frac(0.385f, 0.475f) > 0.35f && frac(0.525f, 0.615f) > 0.35f
+    }
+
+    /** Ölüm penceresinde 'Free Revival' yazısını OCR ile bulup dokunur; bulamazsa işaretli noktaya basar. */
+    private fun revive() {
+        deaths++
+        say("Öldün, Free Revival'a basılıyor")
+        var tapped = false
+        for (i in 0 until 3) {
+            if (i > 0) pause(1500)
+            val b = grab() ?: continue
+            val x0 = (0.30f * b.width).toInt()
+            val y0 = (0.34f * b.height).toInt()
+            val cr = Bitmap.createBitmap(b, x0, y0, (0.40f * b.width).toInt(), (0.34f * b.height).toInt())
+            val res = ocr(cr) ?: continue
+            for (blk in res.textBlocks) for (ln in blk.lines) {
+                if (ln.text.lowercase().contains("revival")) {
+                    val r = ln.boundingBox ?: continue
+                    tapPx((x0 + r.centerX()).toFloat(), (y0 + r.centerY()).toFloat())
+                    tapped = true
+                }
+            }
+            if (tapped) break
+        }
+        if (!tapped && hasPt("revive")) tapPoint("revive")
+        pause(4000)
+        throw Revived()
     }
 
     private fun isGreen(c: Int): Boolean {
@@ -1018,6 +1078,7 @@ class TimerService : AccessibilityService() {
                 block()
             } catch (e: StopEx) {
             } catch (e: StepFail) {
+            } catch (e: Revived) {
             } catch (e: InterruptedException) {
             } catch (e: Exception) {
                 say("Hata: " + e.message)
@@ -1264,6 +1325,10 @@ class TimerService : AccessibilityService() {
         pause(1000)
         tapPoint("shield")
         pause(500)
+        if (on("impOn") && hasPt("imp")) {
+            tapPoint("imp")
+            pause(500)
+        }
         farming = true
         say("Farm modunda")
     }
@@ -1400,6 +1465,8 @@ class TimerService : AccessibilityService() {
     private fun missingForAuto(): List<String> {
         val need = ArrayList<String>()
         if (on("farmOn")) for (n in listOf("chat", "pmTab", "farmLink", "autoAtk", "shield")) if (!hasPt(n)) need.add(n)
+        if (on("farmOn") && on("impOn") && !hasPt("imp")) need.add("imp")
+        if (on("angelOn") && !hasPt("angel")) need.add("angel")
         for (n in listOf("chat", "pmTab", "autoAtk")) if (!hasPt(n) && !need.contains(n)) need.add(n)
         if (on("buffOn") && !hasPt("buffLink")) need.add("buffLink")
         for (e in snapshot()) {
@@ -1469,6 +1536,12 @@ class TimerService : AccessibilityService() {
                     fails = 0
                 }
                 idleTick()
+            } catch (e: Revived) {
+                currentId = 0L
+                gameAuto = false
+                farming = false
+                ui { rebuildList() }
+                say("Canlandın, kaldığın işe dönülüyor")
             } catch (e: StepFail) {
                 fails++
                 val id = currentId
@@ -1535,6 +1608,10 @@ class TimerService : AccessibilityService() {
         val t0 = System.currentTimeMillis()
         val limit = cfgI("fightTimeout", 300) * 1000L
         setAuto(true)
+        if (on("angelOn") && hasPt("angel")) {
+            tapPoint("angel")
+            pause(500)
+        }
         say(title(e) + "\nOto atak açık, boss bekleniyor")
         var seen = false
         var dead = 0

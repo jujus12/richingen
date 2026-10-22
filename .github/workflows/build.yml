@@ -27,17 +27,17 @@ jobs:
         run: gradle assembleDebug --no-daemon
 
       - name: Rename APK
-        run: cp build/outputs/apk/debug/*.apk w0wingen.apk
+        run: cp build/outputs/apk/debug/*.apk richingen.apk
 
       - name: Publish to Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
           name: Build ${{ github.run_number }}
-          files: w0wingen.apk
+          files: richingen.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: w0wingen-debug-apk
-          path: w0wingen.apk
+          name: richingen-debug-apk
+          path: richingen.apk
