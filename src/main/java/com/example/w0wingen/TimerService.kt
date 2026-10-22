@@ -246,6 +246,7 @@ class TimerService : AccessibilityService() {
     private var currentId = 0L
     private var kills = 0
     private var deaths = 0
+    @Volatile private var lastRatio = 0f
     private val deathCnt = HashMap<Long, Int>()
     private var startedAt = 0L
     @Volatile private var lastSay = ""
@@ -715,11 +716,20 @@ class TimerService : AccessibilityService() {
     }
 
     private fun orangeAt(b: Bitmap, name: String): Boolean {
+        return orangeRatio(b, name, 1f) >= 0.12f
+    }
+
+    /** Haritanın kapat (X) düğmesi: işaretli noktada ya da çevresindeki geniş alanda turuncu var mı. */
+    private fun mapOpen(b: Bitmap): Boolean {
+        return orangeRatio(b, "closeMap", 1f) >= 0.12f || orangeRatio(b, "closeMap", 3f) >= 0.04f
+    }
+
+    private fun orangeRatio(b: Bitmap, name: String, scale: Float): Float {
         val p = pt(name)
         val cx = p.first * b.width
         val cy = p.second * b.height
-        val hw = 0.012f * b.width
-        val hh = 0.020f * b.height
+        val hw = 0.012f * scale * b.width
+        val hh = 0.020f * scale * b.height
         val x0 = maxOf(0, (cx - hw).toInt())
         val x1 = minOf(b.width - 1, (cx + hw).toInt())
         val y0 = maxOf(0, (cy - hh).toInt())
@@ -732,7 +742,7 @@ class TimerService : AccessibilityService() {
                 if (isOrange(b.getPixel(x, y))) hit++
             }
         }
-        return tot > 0 && hit.toFloat() / tot >= 0.12f
+        return if (tot > 0) hit.toFloat() / tot else 0f
     }
 
     /** Açık haritada yeşil oyuncu imlecinin merkezi (piksel). Yoksa null. */
@@ -1120,16 +1130,17 @@ class TimerService : AccessibilityService() {
     private fun ensureMap(): Bitmap {
         for (i in 0 until 4) {
             val b = shot()
-            if (b != null && orangeAt(b, "closeMap")) return b
+            if (b != null && mapOpen(b)) return b
+            lastRatio = if (b != null) orangeRatio(b, "closeMap", 1f) else -1f
             tapPoint("minimap")
-            pause(1500)
+            pause(2000)
         }
-        fail("Harita açılamadı. 'Ayar' menüsünden minimap ve closeMap noktalarını kontrol et.")
+        fail("Harita açılamadı (X noktasında turuncu oranı " + String.format("%.2f", lastRatio) + ", gereken 0.12). 'Ayar' menüsünde closeMap noktasını harita açıkken X'in ortasına işaretle.")
     }
 
     private fun closeMapIfOpen() {
         val b = shot() ?: return
-        if (orangeAt(b, "closeMap")) {
+        if (mapOpen(b)) {
             tapPoint("closeMap")
             pause(700)
         }
