@@ -15,6 +15,22 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("fixed") {
+            storeFile = file("richingen.keystore")
+            storePassword = "richingen"
+            keyAlias = "richingen"
+            keyPassword = "richingen"
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            // Her derlemede aynı imza: yeni APK eskisinin üstüne kurulur, ayarlar ve kayıtlar silinmez
+            signingConfig = signingConfigs.getByName("fixed")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
