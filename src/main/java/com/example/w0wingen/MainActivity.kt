@@ -26,7 +26,9 @@ class MainActivity : Activity() {
 
     private val autoFields = listOf(
         Field("leadSec", "Bossa gitme payı", "Süresi bu kadar saniye kalınca (ya da geçmişse) bossa gidilir", "20"),
-        Field("fightTimeout", "Savaş zaman aşımı", "Bir boss için en fazla bekleme (sn)", "300")
+        Field("fightTimeout", "Savaş zaman aşımı", "Bir boss için en fazla bekleme (sn)", "300"),
+        Field("deathLimit", "Ölüm sınırı", "Aynı bossta bu kadar ölünce o boss atlanıp farma dönülür", "3"),
+        Field("deathBlockMin", "Atlama süresi", "Ölüm sınırına ulaşan boss bu kadar dakika atlanır (dk)", "15")
     )
 
     private val farmFields = listOf(
@@ -67,6 +69,7 @@ class MainActivity : Activity() {
 
     private val inputs = HashMap<String, EditText>()
     private lateinit var mapsEdit: EditText
+    private lateinit var ntfyEdit: EditText
     private lateinit var randomOn: Switch
     private lateinit var farmOn: Switch
     private lateinit var impOn: Switch
@@ -141,6 +144,29 @@ class MainActivity : Activity() {
         val auto = card(col, "Otomasyon")
         for (f in autoFields) addField(auto, f)
 
+        val ph = card(col, "Telefon bildirimi")
+        val phHint = TextView(this)
+        phHint.text = "Telefonuna ücretsiz 'ntfy' uygulamasını kur, bu konu adına abone ol. Bildirimler (oyundan atılma, ölüm, boss kesildi, otomasyon durdu) oraya gelir. " +
+            "Telefondan aynı konuya 'durum', 'log' veya 'ekran' yazarsan tablet cevap verir (15 sn içinde). Konu adını kimseyle paylaşma; boş bırakırsan bildirim kapanır."
+        phHint.textSize = 11f
+        phHint.setTextColor(DIM)
+        ph.addView(phHint)
+        if (!prefs().contains("cfg_ntfy")) {
+            val chars = "abcdefghijklmnopqrstuvwxyz0123456789"
+            val rnd = java.util.Random()
+            val sbn = StringBuilder("richingen-")
+            for (i in 0 until 10) sbn.append(chars[rnd.nextInt(chars.length)])
+            prefs().edit().putString("cfg_ntfy", sbn.toString()).apply()
+        }
+        ntfyEdit = EditText(this)
+        ntfyEdit.setText(prefs().getString("cfg_ntfy", ""))
+        ntfyEdit.setTextColor(Color.WHITE)
+        ntfyEdit.textSize = 14f
+        ntfyEdit.setSingleLine(true)
+        ntfyEdit.background = rounded(INPUT, 10)
+        ntfyEdit.setPadding(dp(10), dp(8), dp(10), dp(8))
+        ph.addView(ntfyEdit, lp(dp(8)))
+
         val farm = card(col, "Farm")
         farmOn = sw(farm, "Boss yokken farm konumuna git", "cfg_farmOn", true)
         for (f in farmFields) addField(farm, f)
@@ -179,6 +205,7 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_buffOn", buffOn.isChecked)
             e.putBoolean("cfg_potOn", potOn.isChecked)
             e.putBoolean("cfg_recycleOn", recycleOn.isChecked)
+            e.putString("cfg_ntfy", ntfyEdit.text.toString().trim().replace(Regex("[^A-Za-z0-9_-]"), ""))
             val m = mapsEdit.text.toString().trim()
             e.putString("cfg_maps", if (m.isEmpty()) TimerService.DEFAULT_MAPS else m)
             e.apply()

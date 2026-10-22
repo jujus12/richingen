@@ -53,6 +53,8 @@ class TimerService : AccessibilityService() {
     private class StopEx : RuntimeException()
     /** Ölünce Free Revival basıldı; otomasyon döngüsü kaldığı işe geri döner. */
     private class Revived : RuntimeException()
+    /** Oyundan atıldık (giriş ekranı göründü); otomasyon durur. */
+    private class LoggedOut : RuntimeException()
 
     /** Bir adım başarısız oldu (mesaj zaten gösterildi). */
     private class StepFail : RuntimeException()
@@ -244,6 +246,17 @@ class TimerService : AccessibilityService() {
     private var currentId = 0L
     private var kills = 0
     private var deaths = 0
+    private val deathCnt = HashMap<Long, Int>()
+    private var startedAt = 0L
+    @Volatile private var lastSay = ""
+    private val evLog = java.util.ArrayDeque<String>()
+    @Volatile private var pollRun = false
+    private var pollThread: Thread? = null
+    @Volatile private var lastCmdTime = 0L
+    @Volatile private var shotReq = false
+    @Volatile private var shotOut: Bitmap? = null
+    private var bossWin: LinearLayout? = null
+    private val winTimers = HashMap<Long, TextView>()
     private var fails = 0
     private var lastMaint = 0L
     private var lastPotBuy = 0L
@@ -275,6 +288,7 @@ class TimerService : AccessibilityService() {
         buildUi()
         rebuildList()
         main.postDelayed(ticker, 1000)
+        startPoller()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -282,6 +296,9 @@ class TimerService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        pollRun = false
+        pollThread?.interrupt()
+        closeBossWin()
         cancel = true
         autoRunning = false
         worker?.interrupt()
@@ -305,6 +322,7 @@ class TimerService : AccessibilityService() {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun say(msg: String) {
+        lastSay = msg
         ui { statusView?.text = msg }
     }
 
@@ -361,6 +379,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun fail(msg: String): Nothing {
+        ev("Hata: " + msg.replace("\n", " "))
         say(msg)
         if (!autoRunning) toast(msg)
         throw StepFail()
@@ -559,6 +578,11 @@ class TimerService : AccessibilityService() {
             return null
         }
         latch.await(3, TimeUnit.SECONDS)
+        val rb = result
+        if (shotReq && rb != null) {
+            shotOut = Bitmap.createScaledBitmap(rb, rb.width / 2, rb.height / 2, true)
+            shotReq = false
+        }
         return result
     }
 
@@ -575,7 +599,46 @@ class TimerService : AccessibilityService() {
             handle?.visibility = View.VISIBLE
         }
         if (b != null && autoRunning && on("reviveOn") && deathScreen(b)) revive()
+        if (b != null && autoRunning && loginScreen(b)) loggedOut()
         return b
+    }
+
+    private fun orangeFrac(b: Bitmap, x0: Float, x1: Float, y0: Float, y1: Float): Float {
+        val xa = (x0 * b.width).toInt()
+        val xb = (x1 * b.width).toInt()
+        val ya = (y0 * b.height).toInt()
+        val yb = (y1 * b.height).toInt()
+        var hit = 0
+        var tot = 0
+        var y = ya
+        while (y < yb) {
+            var x = xa
+            while (x < xb) {
+                tot++
+                if (isOrange(b.getPixel(x, y))) hit++
+                x += 3
+            }
+            y += 3
+        }
+        return if (tot == 0) 0f else hit.toFloat() / tot
+    }
+
+    /** Giriş ekranı: ortada turuncu Start Game düğmesi; renk ucuz ön süzgeç, yazı OCR ile doğrulanır. */
+    private fun loginScreen(b: Bitmap): Boolean {
+        if (orangeFrac(b, 0.46f, 0.54f, 0.725f, 0.765f) < 0.2f) return false
+        val x0 = (0.30f * b.width).toInt()
+        val y0 = (0.60f * b.height).toInt()
+        val cr = Bitmap.createBitmap(b, x0, y0, (0.40f * b.width).toInt(), (0.20f * b.height).toInt())
+        val res = ocr(cr) ?: return false
+        val t = res.text.lowercase()
+        return t.contains("start") || t.contains("select server")
+    }
+
+    private fun loggedOut(): Nothing {
+        ev("Oyundan atıldın, otomasyon durdu", true, 5)
+        say("Oyundan atıldın (giriş ekranı). Otomasyon durdu.")
+        autoRunning = false
+        throw LoggedOut()
     }
 
     /** Ölüm penceresindeki iki turuncu düğme (Free Revival, Respawn Now) görünüyor mu? Ucuz renk testi. */
@@ -1079,6 +1142,7 @@ class TimerService : AccessibilityService() {
             } catch (e: StopEx) {
             } catch (e: StepFail) {
             } catch (e: Revived) {
+            } catch (e: LoggedOut) {
             } catch (e: InterruptedException) {
             } catch (e: Exception) {
                 say("Hata: " + e.message)
@@ -1095,6 +1159,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun stopJob() {
+        ev("Elle durduruldu")
         cancel = true
         autoRunning = false
         worker?.interrupt()
@@ -1330,6 +1395,7 @@ class TimerService : AccessibilityService() {
             pause(500)
         }
         farming = true
+        ev("Farm konumunda")
         say("Farm modunda")
     }
 
@@ -1367,6 +1433,7 @@ class TimerService : AccessibilityService() {
             pause(gap())
         }
         say("Pot alındı (3+3), Inventory kapatılıyor")
+        ev("Pot alındı", true, 2)
         closeInventory()
     }
 
@@ -1451,6 +1518,7 @@ class TimerService : AccessibilityService() {
     /** Otomasyon bakımı (her 20 dk): pot okuma/alma, ardından Recycle. */
     private fun maintenance() {
         lastMaint = System.currentTimeMillis()
+        ev("Bakım: pot / Recycle")
         closeMapIfOpen()
         if (on("potOn")) {
             val b = shot()
@@ -1516,6 +1584,9 @@ class TimerService : AccessibilityService() {
         fails = 0
         lastMaint = 0L
         say("Otomasyon açık")
+        startedAt = System.currentTimeMillis()
+        deathCnt.clear()
+        ev("Otomasyon başladı", true, 3)
         buffCheck()
         while (autoRunning && !cancel) {
             try {
@@ -1537,7 +1608,22 @@ class TimerService : AccessibilityService() {
                 }
                 idleTick()
             } catch (e: Revived) {
+                val dead = currentId
                 currentId = 0L
+                var skipped = ""
+                if (dead != 0L) {
+                    val c = (deathCnt[dead] ?: 0) + 1
+                    deathCnt[dead] = c
+                    val lim = cfgI("deathLimit", 3)
+                    if (c >= lim) {
+                        val mins = cfgI("deathBlockMin", 15)
+                        blocked[dead] = System.currentTimeMillis() + mins * 60000L
+                        deathCnt[dead] = 0
+                        val en = snapshot().firstOrNull { it.id == dead }
+                        skipped = " · " + (if (en != null) shortTitle(en) else "boss") + " " + lim + " kez öldürdü, " + mins + " dk atlanıyor, farma dönülüyor"
+                    }
+                }
+                ev("Öldün, dirildin" + skipped, true, 4)
                 gameAuto = false
                 farming = false
                 ui { rebuildList() }
@@ -1552,6 +1638,7 @@ class TimerService : AccessibilityService() {
                 }
                 farming = false
                 if (fails >= 5) {
+                    ev("Üst üste 5 hata, otomasyon durdu", true, 5)
                     say("Üst üste 5 hata, otomasyon durduruldu. Son mesaj yukarıda.")
                     toast("Otomasyon durduruldu: üst üste 5 hata")
                     autoRunning = false
@@ -1587,8 +1674,11 @@ class TimerService : AccessibilityService() {
         if (ok) {
             kills++
             fails = 0
+            deathCnt.remove(e.id)
+            ev("Kesildi: " + shortTitle(e) + " · yeni süre " + fmt((e.endMs - System.currentTimeMillis()) / 1000), true, 2)
             buffCheck()
         } else {
+            ev("Boss başarısız: " + shortTitle(e))
             blocked[e.id] = System.currentTimeMillis() + 90000L
         }
     }
@@ -1913,6 +2003,11 @@ class TimerService : AccessibilityService() {
         val mlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         mlp.topMargin = dp(6)
         outer.addView(mainRow, mlp)
+        val bw = mkBtn("📋  Bosslar penceresi") { toggleBossWin() }
+        bw.textSize = 13f
+        val bwlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36))
+        bwlp.topMargin = dp(6)
+        outer.addView(bw, bwlp)
 
         // boss listesi
         val col = LinearLayout(this)
@@ -1937,9 +2032,9 @@ class TimerService : AccessibilityService() {
             }
             bt.textSize = 12f
             bt.setPadding(dp(2), dp(4), dp(2), dp(4))
-            val inFirst = i < 3
+            val inFirst = i < 4
             val tl = LinearLayout.LayoutParams(0, dp(34), 1f)
-            if (if (inFirst) i > 0 else i > 3) tl.leftMargin = dp(4)
+            if (if (inFirst) i > 0 else i > 4) tl.leftMargin = dp(4)
             (if (inFirst) trow1 else trow2).addView(bt, tl)
             toggleBtns[k] = bt
         }
@@ -2075,6 +2170,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun rebuildList() {
+        if (bossWin != null) { closeBossWin(); toggleBossWin() }
         val l = listCol ?: return
         l.removeAllViews()
         timerViews.clear()
@@ -2140,6 +2236,12 @@ class TimerService : AccessibilityService() {
         val now = System.currentTimeMillis()
         val lead = cfgI("leadSec", 20)
         for (e in snapshot()) {
+            val tv = winTimers[e.id] ?: continue
+            val left = (e.endMs - now) / 1000
+            tv.text = if (left > 0) fmt(left) else "DOĞDU +" + fmt(left)
+            tv.setTextColor(if (left <= lead) OK else if (left <= 120) WARN else Color.WHITE)
+        }
+        for (e in snapshot()) {
             val tv = timerViews[e.id] ?: continue
             val left = (e.endMs - now) / 1000
             tv.text = if (left > 0) fmt(left) else "DOĞDU  +" + fmt(left)
@@ -2151,6 +2253,264 @@ class TimerService : AccessibilityService() {
             tv.setTextColor(c)
             stripViews[e.id]?.setBackgroundColor(c)
         }
+    }
+
+
+    // ------------------------------------------------------------------ kısa adlar ve boss penceresi
+
+    /** "Raklion 2" -> "Rak2", "Divine Realm" -> "DR", "Purgatory of Misery 1" -> "PM1". */
+    private fun shortMap(m: String): String {
+        val parts = m.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val num = parts.lastOrNull { p -> p.all { it.isDigit() } } ?: ""
+        val words = parts.filter { p -> !p.all { it.isDigit() } && p.lowercase() != "of" }
+        val base = if (words.size >= 2) words.joinToString("") { it.take(1).uppercase() } else (words.firstOrNull()?.take(3) ?: m)
+        return base + num
+    }
+
+    private fun shortTitle(e: Entry): String {
+        val w = if (mapInfo(e.map).wires > 1) " · W" + e.wire else ""
+        return shortMap(e.map) + w + " · #" + e.idx
+    }
+
+    private fun closeBossWin() {
+        val w = bossWin ?: return
+        try {
+            wm.removeView(w)
+        } catch (e: Exception) {
+        }
+        bossWin = null
+        winTimers.clear()
+    }
+
+    /** Tüm kayıtlı bosslar için ayrı büyük pencere; satıra dokununca bossa gidip keser. */
+    private fun toggleBossWin() {
+        if (bossWin != null) {
+            closeBossWin()
+            return
+        }
+        refreshScreen()
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.background = rounded(PANEL_BG, 16)
+        outer.setPadding(dp(14), dp(12), dp(14), dp(14))
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        val t = TextView(this)
+        t.text = "Bosslar (" + snapshot().size + ")"
+        t.textSize = 16f
+        t.setTextColor(Color.WHITE)
+        t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        head.addView(t, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(mkBtn("Kapat ✕") { closeBossWin() }, LinearLayout.LayoutParams(dp(90), dp(36)))
+        outer.addView(head)
+        val hint = TextView(this)
+        hint.text = "Satıra dokun: bossa git ve kes. Silmek için ✕'e uzun bas."
+        hint.textSize = 11f
+        hint.setTextColor(TEXT_DIM)
+        hint.setPadding(0, dp(4), 0, dp(4))
+        outer.addView(hint)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        val sv = ScrollView(this)
+        sv.addView(col)
+        outer.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        val list = snapshot().sortedBy { it.endMs }
+        if (list.isEmpty()) {
+            val e0 = TextView(this)
+            e0.text = "Henüz kayıt yok."
+            e0.setTextColor(TEXT_DIM)
+            col.addView(e0)
+        }
+        for (e in list) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(CARD_BG, 10)
+            row.setPadding(dp(12), dp(8), dp(8), dp(8))
+            val left = LinearLayout(this)
+            left.orientation = LinearLayout.VERTICAL
+            val n1 = TextView(this)
+            n1.text = (if (e.id == currentId) "▶ " else "") + shortTitle(e)
+            n1.textSize = 15f
+            n1.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            n1.setTextColor(if (e.id == currentId) ACCENT else Color.WHITE)
+            left.addView(n1)
+            val n2 = TextView(this)
+            n2.text = title(e)
+            n2.textSize = 10f
+            n2.setTextColor(TEXT_DIM)
+            left.addView(n2)
+            row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val tm = TextView(this)
+            tm.textSize = 18f
+            tm.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            tm.setTextColor(Color.WHITE)
+            winTimers[e.id] = tm
+            row.addView(tm)
+            val del = TextView(this)
+            del.text = "✕"
+            del.textSize = 16f
+            del.setTextColor(TEXT_DIM)
+            del.setPadding(dp(14), dp(6), dp(6), dp(6))
+            del.setOnLongClickListener {
+                synchronized(lock) { entries.remove(e) }
+                saveEntries()
+                rebuildList()
+                true
+            }
+            row.addView(del)
+            row.setOnClickListener {
+                if (autoRunning) {
+                    say("Otomasyon açık. Önce otomasyonu durdur.")
+                } else {
+                    closeBossWin()
+                    runManual { goAndKill(e) }
+                }
+            }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(6)
+            col.addView(row, lp)
+        }
+        val w = minOf(dp(440), (screenW * 0.6f).toInt())
+        val lp = overlayParams(w)
+        lp.height = (screenH * 0.82f).toInt()
+        lp.x = (screenW - w) / 2
+        lp.y = (screenH - lp.height) / 2
+        wm.addView(outer, lp)
+        bossWin = outer
+        tick()
+    }
+
+    // ------------------------------------------------------------------ telefon bildirimi ve uzaktan sorgu (ntfy)
+
+    private fun topic(): String = prefs().getString("cfg_ntfy", "")!!.trim()
+
+    private fun ev(msg: String, push: Boolean = false, prio: Int = 3) {
+        val t = java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date())
+        synchronized(evLog) {
+            evLog.addLast(t + " " + msg)
+            while (evLog.size > 80) evLog.removeFirst()
+        }
+        if (push) push(msg, prio)
+    }
+
+    private fun push(msg: String, prio: Int = 3) {
+        val tp = topic()
+        if (tp.isEmpty()) return
+        Thread { postNtfy(tp, msg.toByteArray(Charsets.UTF_8), prio, null) }.start()
+    }
+
+    private fun postNtfy(tp: String, body: ByteArray, prio: Int, filename: String?) {
+        try {
+            val c = java.net.URL("https://ntfy.sh/" + tp).openConnection() as java.net.HttpURLConnection
+            c.requestMethod = if (filename != null) "PUT" else "POST"
+            c.connectTimeout = 8000
+            c.readTimeout = 20000
+            c.doOutput = true
+            c.setRequestProperty("Tags", "robot")
+            c.setRequestProperty("Priority", prio.toString())
+            c.setRequestProperty("Title", "Richingen")
+            if (filename != null) c.setRequestProperty("Filename", filename)
+            c.outputStream.use { it.write(body) }
+            c.responseCode
+            c.disconnect()
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun statusText(): String {
+        val now = System.currentTimeMillis()
+        val sb = StringBuilder()
+        sb.append(if (autoRunning) "Otomasyon AÇIK (" + ((now - startedAt) / 60000) + " dk)" else "Otomasyon kapalı")
+        sb.append("\nBoss " + kills + " · Ölüm " + deaths + (if (farming) " · farmda" else ""))
+        sb.append("\nŞu an: " + lastSay.replace("\n", " · "))
+        val nx = snapshot().sortedBy { it.endMs }.take(5)
+        if (nx.isNotEmpty()) {
+            sb.append("\nSıradakiler:")
+            for (e in nx) sb.append("\n " + shortTitle(e) + "  " + (if (e.endMs > now) fmt((e.endMs - now) / 1000) else "doğdu"))
+        }
+        sb.append("\nSon olaylar:")
+        synchronized(evLog) { for (l in evLog.toList().takeLast(6)) sb.append("\n " + l) }
+        return sb.toString()
+    }
+
+    private fun handleCmd(cmd: String) {
+        val tp = topic()
+        when (cmd.trim().lowercase()) {
+            "durum", "?", "status" -> push(statusText(), 3)
+            "log", "günlük", "gunluk" -> {
+                val l = synchronized(evLog) { evLog.toList().takeLast(30) }
+                push(if (l.isEmpty()) "Günlük boş" else l.joinToString("\n"), 3)
+            }
+            "ekran", "screen" -> Thread { sendScreen(tp) }.start()
+            else -> push("Komutlar: durum · log · ekran", 2)
+        }
+    }
+
+    private fun sendScreen(tp: String) {
+        var bm: Bitmap? = null
+        try {
+            if (busy) {
+                shotOut = null
+                shotReq = true
+                var i = 0
+                while (i < 40 && shotOut == null) {
+                    Thread.sleep(500)
+                    i++
+                }
+                shotReq = false
+                bm = shotOut
+            } else {
+                val g = grab()
+                if (g != null) bm = Bitmap.createScaledBitmap(g, g.width / 2, g.height / 2, true)
+            }
+        } catch (e: Exception) {
+        }
+        if (bm == null) {
+            push("Ekran görüntüsü alınamadı", 2)
+            return
+        }
+        val bos = java.io.ByteArrayOutputStream()
+        bm.compress(Bitmap.CompressFormat.JPEG, 70, bos)
+        postNtfy(tp, bos.toByteArray(), 3, "ekran.jpg")
+    }
+
+    private fun startPoller() {
+        if (pollRun) return
+        pollRun = true
+        lastCmdTime = System.currentTimeMillis() / 1000
+        val t = Thread {
+            while (pollRun) {
+                try {
+                    Thread.sleep(15000)
+                } catch (e: InterruptedException) {
+                    return@Thread
+                }
+                val tp = topic()
+                if (tp.isEmpty()) continue
+                try {
+                    val c = java.net.URL("https://ntfy.sh/" + tp + "/json?poll=1&since=" + lastCmdTime).openConnection() as java.net.HttpURLConnection
+                    c.connectTimeout = 8000
+                    c.readTimeout = 15000
+                    val text = c.inputStream.bufferedReader().use { it.readText() }
+                    c.disconnect()
+                    for (line in text.split("\n")) {
+                        if (line.isBlank()) continue
+                        val j = JSONObject(line)
+                        if (j.optString("event") != "message") continue
+                        val tm = j.optLong("time")
+                        if (tm <= lastCmdTime) continue
+                        lastCmdTime = tm
+                        if (j.optJSONArray("tags")?.toString()?.contains("robot") == true) continue
+                        handleCmd(j.optString("message"))
+                    }
+                } catch (e: Exception) {
+                }
+            }
+        }
+        pollThread = t
+        t.start()
     }
 
     // ------------------------------------------------------------------ ayar menusu
