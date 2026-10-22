@@ -721,7 +721,7 @@ class TimerService : AccessibilityService() {
 
     /** Haritanın kapat (X) düğmesi: işaretli noktada ya da çevresindeki geniş alanda turuncu var mı. */
     private fun mapOpen(b: Bitmap): Boolean {
-        return orangeRatio(b, "closeMap", 1f) >= 0.12f || orangeRatio(b, "closeMap", 3f) >= 0.04f
+        return orangeRatio(b, "closeMap", 1f) >= 0.06f || orangeRatio(b, "closeMap", 3f) >= 0.03f
     }
 
     private fun orangeRatio(b: Bitmap, name: String, scale: Float): Float {
@@ -1135,7 +1135,7 @@ class TimerService : AccessibilityService() {
             tapPoint("minimap")
             pause(2000)
         }
-        fail("Harita açılamadı (X noktasında turuncu oranı " + String.format("%.2f", lastRatio) + ", gereken 0.12). 'Ayar' menüsünde closeMap noktasını harita açıkken X'in ortasına işaretle.")
+        fail("Harita açılamadı (X noktasında turuncu oranı " + String.format("%.3f", lastRatio) + ", gereken 0.06). 'Ayar' menüsünde closeMap noktasını harita açıkken X'in ortasına işaretle.")
     }
 
     private fun closeMapIfOpen() {
