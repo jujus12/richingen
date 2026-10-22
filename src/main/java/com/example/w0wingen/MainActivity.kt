@@ -133,7 +133,8 @@ class MainActivity : Activity() {
         mapsEdit = EditText(this)
         mapsEdit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
         var mapsRaw = prefs().getString("cfg_maps", TimerService.DEFAULT_MAPS)!!
-        if (!mapsRaw.lowercase().contains("swamp of peace")) mapsRaw = mapsRaw.trimEnd() + "\nSwamp of Peace;1"
+        mapsRaw = mapsRaw.replace("Swamp of Peace;1", "Swamp of Peace;3")
+        if (!mapsRaw.lowercase().contains("swamp of peace")) mapsRaw = mapsRaw.trimEnd() + "\nSwamp of Peace;3"
         mapsEdit.setText(mapsRaw)
         mapsEdit.setTextColor(Color.WHITE)
         mapsEdit.textSize = 13f
