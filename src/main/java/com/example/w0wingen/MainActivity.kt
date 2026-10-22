@@ -132,7 +132,9 @@ class MainActivity : Activity() {
         mapsCard.addView(mh)
         mapsEdit = EditText(this)
         mapsEdit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        mapsEdit.setText(prefs().getString("cfg_maps", TimerService.DEFAULT_MAPS))
+        var mapsRaw = prefs().getString("cfg_maps", TimerService.DEFAULT_MAPS)!!
+        if (!mapsRaw.lowercase().contains("swamp of peace")) mapsRaw = mapsRaw.trimEnd() + "\nSwamp of Peace;1"
+        mapsEdit.setText(mapsRaw)
         mapsEdit.setTextColor(Color.WHITE)
         mapsEdit.textSize = 13f
         mapsEdit.background = rounded(INPUT, 10)
