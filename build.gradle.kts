@@ -11,7 +11,7 @@ android {
         applicationId = "com.example.w0wingen"
         minSdk = 30
         targetSdk = 34
-        versionCode = 1
+        versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "1.0"
     }
 

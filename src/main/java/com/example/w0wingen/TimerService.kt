@@ -528,7 +528,9 @@ class TimerService : AccessibilityService() {
                 val dx = (e.px - px) * screenW
                 val dy = (e.py - py) * screenH
                 val d = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
-                if (d <= tol && d < bd) {
+                // Süresi hâlâ çok uzakta olan bir kayıt, az önce kesilen boss olamaz: yakın başka boss'tur.
+                val overdue = e.endMs - System.currentTimeMillis() <= cfgI("leadSec", 20) * 1000L + 120000L
+                if (d <= tol && (d <= tol * 0.4f || overdue) && d < bd) {
                     bd = d
                     hit = e
                 }
