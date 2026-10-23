@@ -59,11 +59,12 @@ class MainActivity : Activity() {
         Field("potMin", "Pot eşiği", "HP veya MP pot sayısı bunun altına inerse alışverişe gidilir", "20"),
         Field("clickGap", "Tık aralığı", "Pot ve Recycle adımları arasındaki bekleme (sn). Oyundaki panelden de değişir", "1.0", true),
         Field("potClicks", "Pot alma tık sayısı", "Eksik olan pot için Purchase düğmesine bu kadar basılır (her basış 99 adet)", "3"),
-        Field("potEvery", "Pot kontrol aralığı", "Otomasyon açıkken bu kadar dakikada bir pot okunur; eksik olan alınır (dk)", "20"),
+        Field("potWatchSec", "Farmda pot okuma sıklığı", "Pot sayısı OCR ile okunur, eşiğin altındaysa alınır. Boss kesince ve golden kesince de okunur. Farmda bu kadar saniyede bir (sn)", "60"),
         Field("recycleEvery", "Recycle aralığı", "Otomasyon açıkken bu kadar dakikada bir Recycle yapılır (dk). Pot kapalı olsa da çalışır", "20")
     )
 
     private val goldFields = listOf(
+        Field("goldWire", "Golden wire", "Golden kesilecek wire (farm ve buff gibi önce bu wire'a geçilir)", "3"),
         Field("goldRadius", "Golden Random yarıçapı", "Golden noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
         Field("goldRetry", "Golden yeniden deneme", "Haritada görünmeyen golden noktası bu kadar saniye atlanır (sn)", "60")
     )
@@ -191,7 +192,7 @@ class MainActivity : Activity() {
         for (f in moveFields) addField(move, f)
 
         val gold = card(col, "Golden canavarlar")
-        goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farmdan önce gelir)", "cfg_goldOn", false)
+        goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farm yerine; ikisini birlikte açma)", "cfg_goldOn", false)
         goldRandomOn = sw(gold, "Golden'a giderken Random kullan", "cfg_goldRandomOn", false)
         for (f in goldFields) addField(gold, f)
 
@@ -201,7 +202,7 @@ class MainActivity : Activity() {
 
         val shop = card(col, "Pot ve Recycle")
         potOn = sw(shop, "Pot alma açık", "cfg_potOn", true)
-        for (k in listOf("potMin", "potClicks", "potEvery")) addField(shop, shopFields.first { it.key == k })
+        for (k in listOf("potMin", "potClicks", "potWatchSec")) addField(shop, shopFields.first { it.key == k })
         recycleOn = sw(shop, "Recycle açık (pot kapalı olsa da çalışır)", "cfg_recycleOn", true)
         for (k in listOf("recycleEvery", "clickGap")) addField(shop, shopFields.first { it.key == k })
 

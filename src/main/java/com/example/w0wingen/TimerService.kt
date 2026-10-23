@@ -61,8 +61,8 @@ class TimerService : AccessibilityService() {
 
     private class MapInfo(val name: String, val wires: Int)
 
-    /** İşaretlenmiş altın (golden) canavar noktası; harita ve wire ile birlikte, ekran oranı olarak. */
-    private class Gold(val id: Long, val map: String, val wire: Int, var idx: Int, val px: Float, val py: Float)
+    /** İşaretlenmiş altın (golden) canavar noktası (ekran oranı). Golden haritası tek: goldMap ayarında tutulur. */
+    private class Gold(val id: Long, var idx: Int, val px: Float, val py: Float)
 
     private class Entry(
         val id: Long,
@@ -110,7 +110,7 @@ class TimerService : AccessibilityService() {
             "2 · Harita" to listOf("minimap", "closeMap", "random"),
             "3 · Chat" to listOf("chat", "pmTab", "closeChat"),
             "5 · Wire (sadece Raklion'lar)" to listOf("switchBtn", "wire1", "wire2", "wire3", "switchOk"),
-            "6 · Farm ve savaş düğmeleri" to listOf("autoAtk", "shield", "imp", "angel", "revive"),
+            "6 · Farm ve savaş düğmeleri" to listOf("autoAtk", "shield", "imp", "angel", "revive", "goldLink"),
             "7 · Envanter, pot, Recycle" to listOf(
                 "inventory", "shopTab", "purchaseHP", "purchaseMP", "hpCount", "mpCount",
                 "recycleTab", "recycleBtn", "closeRight", "closeLeft"
@@ -139,6 +139,7 @@ class TimerService : AccessibilityService() {
             "switchOk" to "Wire seçince onay düğmesi varsa (isteğe bağlı)",
             "autoAtk" to "Sağdaki Auto (oto saldırı) düğmesi",
             "shield" to "Kalkan düğmesi (farm konumuna varınca basılır)",
+            "goldLink" to "PM'de GOLDEN haritasının ışınlanma bağlantısı (golden açıksa; tek koordinat)",
             "imp" to "Imp düğmesi (alt çubukta pot yanında, farm konumuna varınca basılır)",
             "angel" to "Angel düğmesi (alt çubukta pot yanında, bossu keserken basılır)",
             "revive" to "Free Revival düğmesi (isteğe bağlı: yazı okunamazsa buraya basılır; ölüm ekranı açıkken işaretle)",
@@ -1605,19 +1606,23 @@ class TimerService : AccessibilityService() {
     }
 
     /** Otomasyon bakımı (her 20 dk): pot okuma/alma, ardından Recycle. */
-    private fun maintenance(potDue: Boolean, recDue: Boolean) {
-        ev("Bakım:" + (if (potDue) " pot" else "") + (if (recDue) " Recycle" else ""))
+    /** Recycle: otomasyon çalışırken her recycleEvery dakikada bir. */
+    private fun maintenance(recDue: Boolean) {
+        ev("Bakım: Recycle")
         closeMapIfOpen()
-        if (potDue) {
-            lastPot = System.currentTimeMillis()
-            val b = shot()
-            if (b != null) checkPots(b)
-            pause(gap())
-        }
         if (recDue) {
             lastRecycle = System.currentTimeMillis()
             doRecycle()
         }
+    }
+
+    /** Pot sayısını OCR ile okur; eşiğin altındaki pot varsa alır. Süreye değil okumaya bağlı. */
+    private fun potCheckNow() {
+        if (!on("potOn")) return
+        lastPot = System.currentTimeMillis()
+        closeMapIfOpen()
+        val b = shot() ?: return
+        checkPots(b)
     }
 
     // ------------------------------------------------------------------ otomasyon
@@ -1629,9 +1634,18 @@ class TimerService : AccessibilityService() {
         if (on("angelOn") && !hasPt("angel")) need.add("angel")
         for (n in listOf("chat", "pmTab", "autoAtk")) if (!hasPt(n) && !need.contains(n)) need.add(n)
         if (on("buffOn") && !hasPt("buffLink")) need.add("buffLink")
+        if (on("goldOn")) {
+            if (goldSnapshot().isEmpty()) need.add("golden noktaları (Araçlar > Golden işaretle)")
+            if (!hasPt("goldLink")) need.add("goldLink")
+            val gm = goldMapName()
+            if (gm.isNotEmpty() && mapInfo(gm).wires > 1) {
+                val n = "wire" + cfgI("goldWire", 3)
+                if (!hasPt(n)) need.add(n)
+                if (!hasPt("switchBtn")) need.add("switchBtn")
+            }
+        }
         val maps = ArrayList<String>()
         for (e in snapshot()) maps.add(e.map)
-        if (on("goldOn")) for (g in goldSnapshot()) maps.add(g.map)
         for (m in maps) {
             val l = "link_" + m
             if (!hasPt(l) && !need.contains(l)) need.add(l)
@@ -1677,27 +1691,22 @@ class TimerService : AccessibilityService() {
         gameAuto = false
         farming = false
         fails = 0
-        lastPot = 0L
+        lastPot = System.currentTimeMillis()
         lastRecycle = 0L
         say("Otomasyon açık")
         startedAt = System.currentTimeMillis()
         deathCnt.clear()
         ev("Otomasyon başladı", true, 3)
         buffCheck()
+        potCheckNow()
         while (autoRunning && !cancel) {
             try {
                 val now = System.currentTimeMillis()
                 val due = nextDue()
-                val potEvery = cfgI("potEvery", 20) * 60000L
                 val recEvery = cfgI("recycleEvery", 20) * 60000L
-                val potDue = on("potOn") && now - lastPot >= potEvery
                 val recDue = on("recycleOn") && now - lastRecycle >= recEvery
-                val lateBy = maxOf(
-                    if (potDue) now - lastPot - potEvery else 0L,
-                    if (recDue) now - lastRecycle - recEvery else 0L
-                )
-                if ((potDue || recDue) && (due == null || lateBy >= 300000L)) {
-                    maintenance(potDue, recDue)
+                if (recDue && (due == null || now - lastRecycle - recEvery >= 300000L)) {
+                    maintenance(recDue)
                     continue
                 }
                 if (due != null) {
@@ -1765,6 +1774,10 @@ class TimerService : AccessibilityService() {
 
     private fun idleTick() {
         val now = System.currentTimeMillis()
+        if (farming && on("potOn") && now - lastPot >= cfgI("potWatchSec", 60) * 1000L) {
+            potCheckNow()
+            return
+        }
         var next: Entry? = null
         for (e in snapshot()) if (next == null || e.endMs < next.endMs) next = e
         say(
@@ -1791,6 +1804,7 @@ class TimerService : AccessibilityService() {
             deathCnt.remove(e.id)
             ev("Kesildi: " + shortTitle(e) + " · yeni süre " + fmt((e.endMs - System.currentTimeMillis()) / 1000), true, 2)
             buffCheck()
+            potCheckNow()
         } else {
             ev("Boss başarısız: " + shortTitle(e))
             blocked[e.id] = System.currentTimeMillis() + 90000L
@@ -2652,8 +2666,9 @@ class TimerService : AccessibilityService() {
                 val a = JSONArray(prefs().getString("golds", "[]") ?: "[]")
                 for (i in 0 until a.length()) {
                     val o = a.getJSONObject(i)
-                    golds.add(Gold(o.getLong("id"), o.getString("map"), o.getInt("wire"), o.optInt("idx", 1),
+                    golds.add(Gold(o.getLong("id"), o.optInt("idx", golds.size + 1),
                         o.getDouble("px").toFloat(), o.getDouble("py").toFloat()))
+                    if (!prefs().contains("goldMap") && o.has("map")) prefs().edit().putString("goldMap", o.getString("map")).apply()
                 }
             } catch (e: Exception) {
             }
@@ -2666,8 +2681,6 @@ class TimerService : AccessibilityService() {
             for (g in golds) {
                 val o = JSONObject()
                 o.put("id", g.id)
-                o.put("map", g.map)
-                o.put("wire", g.wire)
                 o.put("idx", g.idx)
                 o.put("px", g.px.toDouble())
                 o.put("py", g.py.toDouble())
@@ -2679,9 +2692,43 @@ class TimerService : AccessibilityService() {
 
     private fun goldSnapshot(): List<Gold> = synchronized(lock) { ArrayList(golds) }
 
+    private fun goldMapName(): String = prefs().getString("goldMap", "") ?: ""
+
     private fun goldTitle(g: Gold): String {
-        val w = if (mapInfo(g.map).wires > 1) " · W" + g.wire else ""
-        return shortMap(g.map) + w + " · G#" + g.idx
+        val m = goldMapName()
+        return (if (m.isEmpty()) "Golden" else shortMap(m)) + " · G#" + g.idx
+    }
+
+    /**
+     * Golden haritasına gelir. Zaten o haritadaysa ve wire doğruysa bir şey yapmaz. Değilse farm/buff gibi:
+     * önce seçilen wire'a geçer, sonra chat'ten golden bağlantısına tıklar, varınca wire'ı doğrular.
+     */
+    private fun ensureGoldMap() {
+        val gm = goldMapName()
+        if (gm.isEmpty()) fail("Golden haritası belli değil. Önce 'Golden işaretle' ile nokta kaydet.")
+        val gw = cfgI("goldWire", 3)
+        closeMapIfOpen()
+        var cur = readMapWireRetry()
+        if (key(cur.first) == key(gm)) {
+            if (mapInfo(gm).wires > 1 && cur.second != gw) {
+                say("Golden için Wire " + gw + " seçiliyor")
+                if (!switchTo(gw)) fail("Wire değişmedi (istenen Wire " + gw + ")")
+            }
+            return
+        }
+        if (!hasPt("goldLink")) fail("Önce 'Ayar' menüsünden işaretle: goldLink")
+        if (mapInfo(cur.first).wires > 1 && cur.second != gw) {
+            say("Golden için Wire " + gw + " seçiliyor")
+            switchTo(gw)
+        }
+        say("Golden haritasına gidiliyor")
+        openChatLink("goldLink")
+        pause(cfgI("mapTravel", 10) * 1000)
+        cur = readMapWireRetry()
+        if (key(cur.first) != key(gm)) fail("Golden haritasına ışınlanılamadı, şu an: " + cur.first)
+        if (mapInfo(gm).wires > 1 && cur.second != gw) {
+            if (!switchTo(gw)) fail("Wire değişmedi (istenen Wire " + gw + ")")
+        }
     }
 
     /** Sıradaki golden: işaretlenenler arasında dönerek, yakın zamanda "yok" çıkanları atlayarak. */
@@ -2705,6 +2752,7 @@ class TimerService : AccessibilityService() {
         currentGold = 0L
         if (ok) {
             fails = 0
+            potCheckNow()
         } else {
             goldBlocked[g.id] = System.currentTimeMillis() + cfgI("goldRetry", 60) * 1000L
         }
@@ -2720,7 +2768,7 @@ class TimerService : AccessibilityService() {
             setAuto(false)
             farming = false
         }
-        ensureLocation(g.map, g.wire)
+        ensureGoldMap()
         val mb = ensureMap()
         refreshScreen()
         val sc = mb.width / 2560f
@@ -2791,10 +2839,17 @@ class TimerService : AccessibilityService() {
     private fun goldMark() {
         closeMapIfOpen()
         val info = readMapWireRetry()
+        val old = goldMapName()
+        if (old.isNotEmpty() && key(old) != key(info.first) && goldSnapshot().isNotEmpty()) {
+            synchronized(lock) { golds.clear() }
+            saveGolds()
+            toast("Golden haritası değişti (" + old + " -> " + info.first + "), eski noktalar silindi")
+        }
+        prefs().edit().putString("goldMap", info.first).apply()
         val mb = ensureMap()
         val skulls = scanSkulls(mb)
         say("Golden işaretleme: " + info.first + " · " + skulls.size + " ikon bulundu")
-        ui { showGoldMark(info.first, info.second, skulls) }
+        ui { showGoldMark(info.first, skulls) }
     }
 
     private class GoldMarkView(
@@ -2828,11 +2883,10 @@ class TimerService : AccessibilityService() {
         }
     }
 
-    private fun showGoldMark(map: String, wire: Int, skulls: List<PointF>) {
+    private fun showGoldMark(map: String, skulls: List<PointF>) {
         removeExtra()
         val picked = ArrayList<PointF>()
-        val existing = goldSnapshot().filter { key(it.map) == key(map) && it.wire == wire }
-            .map { PointF(it.px * screenW, it.py * screenH) }
+        val existing = goldSnapshot().map { PointF(it.px * screenW, it.py * screenH) }
         val view = GoldMarkView(this, skulls, existing, picked)
         val fl = FrameLayout(this)
         fl.setBackgroundColor(0x22000000)
@@ -2846,7 +2900,7 @@ class TimerService : AccessibilityService() {
         info.setTextColor(Color.WHITE)
         info.textSize = 12f
         fun refreshInfo() {
-            info.text = map + " · W" + wire + "\nSeçili: " + picked.size + " (sarı halka: bulunan, camgöbeği: kayıtlı)"
+            info.text = map + "\nSeçili: " + picked.size + " (sarı halka: bulunan, camgöbeği: kayıtlı)"
         }
         refreshInfo()
         bar.addView(info)
@@ -2862,14 +2916,11 @@ class TimerService : AccessibilityService() {
                 for (k in picked) {
                     val px = k.x / screenW
                     val py = k.y / screenH
-                    val dup = golds.any {
-                        key(it.map) == key(map) && it.wire == wire &&
-                            dist(PointF(it.px * screenW, it.py * screenH), k) < 40f
-                    }
+                    val dup = golds.any { dist(PointF(it.px * screenW, it.py * screenH), k) < 40f }
                     if (dup) continue
                     var idx = 1
-                    while (golds.any { key(it.map) == key(map) && it.wire == wire && it.idx == idx }) idx++
-                    golds.add(Gold(System.currentTimeMillis() + added, map, wire, idx, px, py))
+                    while (golds.any { it.idx == idx }) idx++
+                    golds.add(Gold(System.currentTimeMillis() + added, idx, px, py))
                     added++
                 }
             }
@@ -2957,7 +3008,7 @@ class TimerService : AccessibilityService() {
         val sv = ScrollView(this)
         sv.addView(col)
         outer.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        val list = goldSnapshot().sortedWith(compareBy({ it.map }, { it.wire }, { it.idx }))
+        val list = goldSnapshot().sortedBy { it.idx }
         if (list.isEmpty()) {
             val e0 = TextView(this)
             e0.text = "Henüz golden noktası yok."
@@ -2979,7 +3030,7 @@ class TimerService : AccessibilityService() {
             n1.setTextColor(if (g.id == currentGold) ACCENT else Color.WHITE)
             left.addView(n1)
             val n2 = TextView(this)
-            n2.text = g.map + (if (mapInfo(g.map).wires > 1) " · Wire " + g.wire else "") + " · Golden " + g.idx
+            n2.text = goldMapName() + " · Golden " + g.idx
             n2.textSize = 10f
             n2.setTextColor(TEXT_DIM)
             left.addView(n2)
