@@ -758,22 +758,62 @@ class TimerService : AccessibilityService() {
         val y1 = (MAP_Y1 * bh).toInt()
         val w = x1 - x0
         val h = y1 - y0
-        var gx = 0L
-        var gy = 0L
-        var gn = 0
+        val mask = BooleanArray(w * h)
+        val blue = IntArray(w * h)
         val row = IntArray(w)
         for (y in 0 until h) {
             b.getPixels(row, 0, w, x0, y0 + y, w, 1)
             for (x in 0 until w) {
                 if (isGreen(row[x])) {
-                    gx += x
-                    gy += y
-                    gn++
+                    mask[y * w + x] = true
+                    blue[y * w + x] = Color.blue(row[x])
                 }
             }
         }
-        if (gn < 15 * s * s) return null
-        return PointF(x0 + gx.toFloat() / gn, y0 + gy.toFloat() / gn)
+        // Yeşil lekeleri ayır: oyuncu oku tek parça ve büyük, NPC yazı harfleri ve kişi ikonları küçük parçalardır.
+        val stack = IntArray(w * h)
+        var bestN = 0
+        var bestX = 0f
+        var bestY = 0f
+        var bestBlue = 0f
+        for (start in mask.indices) {
+            if (!mask[start]) continue
+            var sp = 0
+            stack[sp++] = start
+            mask[start] = false
+            var n = 0
+            var sx = 0L
+            var sy = 0L
+            var sb = 0L
+            while (sp > 0) {
+                val cur = stack[--sp]
+                val cx = cur % w
+                val cy = cur / w
+                n++
+                sx += cx
+                sy += cy
+                sb += blue[cur]
+                for (dy in -1..1) for (dx in -1..1) {
+                    if (dx == 0 && dy == 0) continue
+                    val nx = cx + dx
+                    val ny = cy + dy
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+                    val ni = ny * w + nx
+                    if (mask[ni]) {
+                        mask[ni] = false
+                        stack[sp++] = ni
+                    }
+                }
+            }
+            if (n > bestN) {
+                bestN = n
+                bestX = sx.toFloat() / n
+                bestY = sy.toFloat() / n
+                bestBlue = sb.toFloat() / n
+            }
+        }
+        if (bestN < 60 * s * s) return null
+        return PointF(x0 + bestX, y0 + bestY)
     }
 
     /** Mini haritadaki canlı boss ikonunun turuncu-kırmızı alev rengi. Ölü ikon soluk olduğu için buna girmez. */
