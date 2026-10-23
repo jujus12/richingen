@@ -58,7 +58,14 @@ class MainActivity : Activity() {
     private val shopFields = listOf(
         Field("potMin", "Pot eşiği", "HP veya MP pot sayısı bunun altına inerse alışverişe gidilir", "20"),
         Field("clickGap", "Tık aralığı", "Pot ve Recycle adımları arasındaki bekleme (sn). Oyundaki panelden de değişir", "1.0", true),
-        Field("maintMin", "Bakım aralığı", "Otomasyon açıkken bu kadar dakikada bir pot okunur/alınır, ardından Recycle yapılır (dk)", "20")
+        Field("potClicks", "Pot alma tık sayısı", "Eksik olan pot için Purchase düğmesine bu kadar basılır (her basış 99 adet)", "3"),
+        Field("potEvery", "Pot kontrol aralığı", "Otomasyon açıkken bu kadar dakikada bir pot okunur; eksik olan alınır (dk)", "20"),
+        Field("recycleEvery", "Recycle aralığı", "Otomasyon açıkken bu kadar dakikada bir Recycle yapılır (dk). Pot kapalı olsa da çalışır", "20")
+    )
+
+    private val goldFields = listOf(
+        Field("goldRadius", "Golden Random yarıçapı", "Golden noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
+        Field("goldRetry", "Golden yeniden deneme", "Haritada görünmeyen golden noktası bu kadar saniye atlanır (sn)", "60")
     )
 
     private val BG = 0xFF0F1115.toInt()
@@ -72,6 +79,8 @@ class MainActivity : Activity() {
     private lateinit var ntfyEdit: EditText
     private lateinit var randomOn: Switch
     private lateinit var farmOn: Switch
+    private lateinit var goldOn: Switch
+    private lateinit var goldRandomOn: Switch
     private lateinit var impOn: Switch
     private lateinit var angelOn: Switch
     private lateinit var reviveOn: Switch
@@ -181,20 +190,25 @@ class MainActivity : Activity() {
         randomOn = sw(move, "Bossa giderken Random ışınlanma açık", "cfg_randomOn", true)
         for (f in moveFields) addField(move, f)
 
+        val gold = card(col, "Golden canavarlar")
+        goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farmdan önce gelir)", "cfg_goldOn", false)
+        goldRandomOn = sw(gold, "Golden'a giderken Random kullan", "cfg_goldRandomOn", false)
+        for (f in goldFields) addField(gold, f)
+
         val buff = card(col, "Buff")
         buffOn = sw(buff, "Buff alma açık", "cfg_buffOn", false)
         for (f in buffFields) addField(buff, f)
 
         val shop = card(col, "Pot ve Recycle")
         potOn = sw(shop, "Pot alma açık", "cfg_potOn", true)
-        addField(shop, shopFields[0])
-        recycleOn = sw(shop, "Recycle açık (pot kontrolünden sonra)", "cfg_recycleOn", true)
-        addField(shop, shopFields[1])
+        for (k in listOf("potMin", "potClicks", "potEvery")) addField(shop, shopFields.first { it.key == k })
+        recycleOn = sw(shop, "Recycle açık (pot kapalı olsa da çalışır)", "cfg_recycleOn", true)
+        for (k in listOf("recycleEvery", "clickGap")) addField(shop, shopFields.first { it.key == k })
 
         val save = button("Kaydet", true)
         save.setOnClickListener {
             val e = prefs().edit()
-            val all = autoFields + farmFields + moveFields + buffFields + shopFields
+            val all = autoFields + farmFields + moveFields + goldFields + buffFields + shopFields
             for ((k, et) in inputs) {
                 val f = all.first { it.key == k }
                 val raw = et.text.toString().trim()
@@ -202,6 +216,8 @@ class MainActivity : Activity() {
             }
             e.putBoolean("cfg_randomOn", randomOn.isChecked)
             e.putBoolean("cfg_farmOn", farmOn.isChecked)
+            e.putBoolean("cfg_goldOn", goldOn.isChecked)
+            e.putBoolean("cfg_goldRandomOn", goldRandomOn.isChecked)
             e.putBoolean("cfg_impOn", impOn.isChecked)
             e.putBoolean("cfg_angelOn", angelOn.isChecked)
             e.putBoolean("cfg_reviveOn", reviveOn.isChecked)
