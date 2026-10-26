@@ -618,15 +618,23 @@ class TimerService : AccessibilityService() {
 
     /** Panel ve tutamacı gizleyip ekran görüntüsü alır (panel okunacak yerleri kapatmasın). */
     private fun shot(): Bitmap? {
-        ui {
-            if (panelOpen) panel?.visibility = View.INVISIBLE
-            handle?.visibility = View.INVISIBLE
+        // Otomasyon sürerken tutamaç gizlenip gösterilmez (yanıp sönme olmasın); elle yapılan okumalarda gizlenir
+        val hidePanel = panelOpen
+        val hideHandle = !autoRunning
+        val hide = hidePanel || hideHandle
+        if (hide) {
+            ui {
+                if (hidePanel) panel?.visibility = View.INVISIBLE
+                if (hideHandle) handle?.visibility = View.INVISIBLE
+            }
+            Thread.sleep(350)
         }
-        Thread.sleep(350)
         val b = grab()
-        ui {
-            panel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
-            handle?.visibility = View.VISIBLE
+        if (hide) {
+            ui {
+                panel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
+                handle?.visibility = View.VISIBLE
+            }
         }
         if (b != null && autoRunning && on("reviveOn") && deathScreen(b)) revive()
         if (b != null && autoRunning && loginScreen(b)) loggedOut()
@@ -2009,6 +2017,41 @@ class TimerService : AccessibilityService() {
         gapView?.text = String.format("%.2f", v)
     }
 
+    private val sizeBtns = ArrayList<Button>()
+    private var alphaView: TextView? = null
+
+    private fun panelW(): Int = dp(intArrayOf(200, 250, 310)[prefs().getInt("uiSize", 1).coerceIn(0, 2)])
+
+    private fun uiAlpha(): Int = prefs().getInt("uiAlpha", 95).coerceIn(30, 100)
+
+    private fun updateSizeBtns() {
+        val cur = prefs().getInt("uiSize", 1).coerceIn(0, 2)
+        for (i in sizeBtns.indices) {
+            sizeBtns[i].background = rounded(if (i == cur) ACCENT else CARD_BG, 10)
+            sizeBtns[i].setTextColor(if (i == cur) 0xFF04202D.toInt() else Color.WHITE)
+        }
+    }
+
+    private fun setUiSize(i: Int) {
+        prefs().edit().putInt("uiSize", i).apply()
+        updateSizeBtns()
+        val pl = panelLp ?: return
+        val p = panel ?: return
+        pl.width = panelW()
+        try {
+            wm.updateViewLayout(p, pl)
+        } catch (e: Exception) {
+        }
+        placeBar()
+    }
+
+    private fun changeAlpha(delta: Int) {
+        val v = (uiAlpha() + delta).coerceIn(30, 100)
+        prefs().edit().putInt("uiAlpha", v).apply()
+        alphaView?.text = v.toString()
+        panel?.alpha = v / 100f
+    }
+
     private fun changeGoldRadius(delta: Int) {
         val v = (cfgI("goldRadius", 150) + delta).coerceIn(0, 1000)
         prefs().edit().putString("cfg_goldRadius", v.toString()).apply()
@@ -2045,7 +2088,7 @@ class TimerService : AccessibilityService() {
         val p = panel ?: return
         val hw = dp(30)
         val hh = dp(56)
-        val pw = dp(250)
+        val pw = panelW()
         hx = hx.coerceIn(0, maxOf(0, screenW - hw))
         hy = hy.coerceIn(0, maxOf(0, screenH - hh))
         val hl = handleLp
@@ -2088,23 +2131,17 @@ class TimerService : AccessibilityService() {
         head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
         val title = TextView(this)
-        title.text = "Boss süreleri"
+        title.text = "Richingen"
         title.textSize = 15f
         title.setTextColor(Color.WHITE)
         title.typeface = android.graphics.Typeface.DEFAULT_BOLD
         head.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        val tools = TextView(this)
-        tools.text = "⋯ Araçlar"
-        tools.textSize = 12f
-        tools.setTextColor(TEXT_DIM)
-        tools.setPadding(dp(8), dp(2), 0, dp(2))
-        head.addView(tools)
         outer.addView(head)
 
         val st = TextView(this)
         st.textSize = 11f
         st.setTextColor(Color.WHITE)
-        st.maxLines = 5
+        st.maxLines = 3
         st.setPadding(0, dp(6), 0, dp(2))
         st.text = "Hazır"
         statusView = st
@@ -2133,12 +2170,18 @@ class TimerService : AccessibilityService() {
         mainRow.addView(ab, alp)
         val mlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         mlp.topMargin = dp(6)
-        outer.addView(mainRow, mlp)
+        val mainRowLp = mlp
+        val tabBoss = LinearLayout(this)
+        tabBoss.orientation = LinearLayout.VERTICAL
+        val tabAuto = LinearLayout(this)
+        tabAuto.orientation = LinearLayout.VERTICAL
+        val tabTools = LinearLayout(this)
+        tabTools.orientation = LinearLayout.VERTICAL
         val bw = mkBtn("📋  Bosslar penceresi") { toggleBossWin() }
         bw.textSize = 13f
         val bwlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36))
         bwlp.topMargin = dp(6)
-        outer.addView(bw, bwlp)
+        tabBoss.addView(bw, bwlp)
 
         // boss listesi
         val col = LinearLayout(this)
@@ -2146,40 +2189,45 @@ class TimerService : AccessibilityService() {
         listCol = col
         val sv = ScrollView(this)
         sv.addView(col)
-        val slp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.30f).toInt())
+        val slp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.28f).toInt())
         slp.topMargin = dp(8)
-        outer.addView(sv, slp)
+        tabBoss.addView(sv, slp)
 
-        // açık/kapalı düğmeleri (iki satır)
-        val trow1 = LinearLayout(this)
-        trow1.orientation = LinearLayout.HORIZONTAL
-        val trow2 = LinearLayout(this)
-        trow2.orientation = LinearLayout.HORIZONTAL
-        for (i in TOGGLES.indices) {
-            val k = TOGGLES[i].first
-            val bt = mkBtn("") {
-                prefs().edit().putBoolean("cfg_" + k, !on(k)).apply()
-                updateToggles()
+        // açık/kapalı düğmeleri, gruplanmış
+        fun togGroup(title: String, keys: List<String>) {
+            val lab = TextView(this)
+            lab.text = title
+            lab.textSize = 11f
+            lab.setTextColor(TEXT_DIM)
+            lab.setPadding(0, dp(8), 0, dp(2))
+            tabAuto.addView(lab)
+            for (chunk in keys.chunked(3)) {
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                for ((j, k) in chunk.withIndex()) {
+                    val bt = mkBtn("") {
+                        prefs().edit().putBoolean("cfg_" + k, !on(k)).apply()
+                        updateToggles()
+                    }
+                    bt.textSize = 12f
+                    val tl = LinearLayout.LayoutParams(0, dp(38), 1f)
+                    if (j > 0) tl.leftMargin = dp(4)
+                    row.addView(bt, tl)
+                    toggleBtns[k] = bt
+                }
+                for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(38), 1f))
+                val rl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                rl.topMargin = dp(4)
+                tabAuto.addView(row, rl)
             }
-            bt.textSize = 11f
-            bt.setPadding(dp(2), dp(4), dp(2), dp(4))
-            val inFirst = i < 5
-            val tl = LinearLayout.LayoutParams(0, dp(34), 1f)
-            if (if (inFirst) i > 0 else i > 5) tl.leftMargin = dp(4)
-            (if (inFirst) trow1 else trow2).addView(bt, tl)
-            toggleBtns[k] = bt
         }
-        val t1lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        t1lp.topMargin = dp(8)
-        outer.addView(trow1, t1lp)
-        val t2lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        t2lp.topMargin = dp(4)
-        outer.addView(trow2, t2lp)
+        togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "randomOn"))
+        togGroup("BAKIM", listOf("potOn", "recycleOn", "buffOn"))
+        togGroup("SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
         // araçlar (varsayılan gizli)
         val tb = LinearLayout(this)
         tb.orientation = LinearLayout.VERTICAL
-        tb.visibility = View.GONE
         val r1 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "Shizuku" to { shizukuAsk() },
@@ -2263,16 +2311,83 @@ class TimerService : AccessibilityService() {
         gr.addView(mkBtn("+") { changeGap(0.25f) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         tb.addView(gr, rlp)
         toolsBox = tb
-        outer.addView(tb)
-        tools.setOnClickListener {
-            toolsOpen = !toolsOpen
-            tb.visibility = if (toolsOpen) View.VISIBLE else View.GONE
-            tools.text = if (toolsOpen) "⋯ Araçlar ▴" else "⋯ Araçlar"
+        // panel boyutu ve saydamlık
+        val sr = LinearLayout(this)
+        sr.orientation = LinearLayout.HORIZONTAL
+        sr.gravity = Gravity.CENTER_VERTICAL
+        val sl = TextView(this)
+        sl.text = "Panel boyutu"
+        sl.textSize = 11f
+        sl.setTextColor(Color.WHITE)
+        sr.addView(sl, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val sizeNames = listOf("Küçük", "Orta", "Büyük")
+        for (i in sizeNames.indices) {
+            val sb2 = mkBtn(sizeNames[i]) { setUiSize(i) }
+            sb2.textSize = 11f
+            sizeBtns.add(sb2)
+            val sbl = LinearLayout.LayoutParams(dp(54), dp(34))
+            sbl.leftMargin = dp(3)
+            sr.addView(sb2, sbl)
+        }
+        tb.addView(sr, rlp)
+        val ar = LinearLayout(this)
+        ar.orientation = LinearLayout.HORIZONTAL
+        ar.gravity = Gravity.CENTER_VERTICAL
+        val al = TextView(this)
+        al.text = "Saydamlık (%)"
+        al.textSize = 11f
+        al.setTextColor(Color.WHITE)
+        ar.addView(al, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val av = TextView(this)
+        av.text = uiAlpha().toString()
+        av.textSize = 13f
+        av.gravity = Gravity.CENTER
+        av.setTextColor(ACCENT)
+        alphaView = av
+        ar.addView(mkBtn("−") { changeAlpha(-10) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+        ar.addView(av, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
+        ar.addView(mkBtn("+") { changeAlpha(10) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+        tb.addView(ar, rlp)
+        tabTools.addView(tb)
+
+        // sekmeler
+        val tabNames = listOf("Bosslar", "Oto", "Araçlar")
+        val tabViews = listOf<View>(tabBoss, tabAuto, tabTools)
+        val tabBtns = ArrayList<TextView>()
+        val tabBar = LinearLayout(this)
+        tabBar.orientation = LinearLayout.HORIZONTAL
+        fun showTab(i: Int) {
+            for (k in tabViews.indices) {
+                tabViews[k].visibility = if (k == i) View.VISIBLE else View.GONE
+                tabBtns[k].setTextColor(if (k == i) ACCENT else TEXT_DIM)
+                tabBtns[k].background = rounded(if (k == i) CARD_BG else 0x00000000, 8)
+            }
+            prefs().edit().putInt("tab", i).apply()
             outer.post { placeBar() }
         }
+        for ((k, n) in tabNames.withIndex()) {
+            val t = TextView(this)
+            t.text = n
+            t.textSize = 13f
+            t.gravity = Gravity.CENTER
+            t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            t.setOnClickListener { showTab(k) }
+            tabBtns.add(t)
+            tabBar.addView(t, LinearLayout.LayoutParams(0, dp(34), 1f))
+        }
+        val tbl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        tbl.topMargin = dp(6)
+        outer.addView(tabBar, tbl)
+        outer.addView(tabBoss)
+        outer.addView(tabAuto)
+        outer.addView(tabTools)
+        showTab(prefs().getInt("tab", 0).coerceIn(0, 2))
+        outer.addView(mainRow, mainRowLp)
+        outer.alpha = uiAlpha() / 100f
+        updateSizeBtns()
 
         outer.visibility = View.GONE
-        val pl = overlayParams(dp(250))
+        val pl = overlayParams(panelW())
         wm.addView(outer, pl)
         panel = outer
         panelLp = pl
