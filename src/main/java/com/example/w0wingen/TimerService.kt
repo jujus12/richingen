@@ -175,7 +175,8 @@ class TimerService : AccessibilityService() {
             "hpCount" to Pair(0.432f, 0.980f),
             "mpCount" to Pair(0.480f, 0.980f),
             "closeRight" to Pair(0.984f, 0.074f),
-            "closeLeft" to Pair(0.672f, 0.074f)
+            "closeLeft" to Pair(0.672f, 0.074f),
+            "revive" to Pair(0.431f, 0.586f)
         )
 
         // harita çizim alanı (ekran oranı): yeşil oyuncu imleci burada aranır
@@ -252,6 +253,7 @@ class TimerService : AccessibilityService() {
     private var currentId = 0L
     private var kills = 0
     private var deaths = 0
+    @Volatile private var lastLoginChk = 0L
     private val golds = ArrayList<Gold>()
     private var goldKills = 0
     private var goldWinOpen = false
@@ -631,7 +633,7 @@ class TimerService : AccessibilityService() {
         return b
     }
 
-    private fun orangeFrac(b: Bitmap, x0: Float, x1: Float, y0: Float, y1: Float): Float {
+    private fun brownFrac(b: Bitmap, x0: Float, x1: Float, y0: Float, y1: Float): Float {
         val xa = (x0 * b.width).toInt()
         val xb = (x1 * b.width).toInt()
         val ya = (y0 * b.height).toInt()
@@ -643,7 +645,7 @@ class TimerService : AccessibilityService() {
             var x = xa
             while (x < xb) {
                 tot++
-                if (isOrange(b.getPixel(x, y))) hit++
+                if (isButtonBrown(b.getPixel(x, y))) hit++
                 x += 3
             }
             y += 3
@@ -651,9 +653,11 @@ class TimerService : AccessibilityService() {
         return if (tot == 0) 0f else hit.toFloat() / tot
     }
 
-    /** Giriş ekranı: ortada turuncu Start Game düğmesi; renk ucuz ön süzgeç, yazı OCR ile doğrulanır. */
+    /** Giriş ekranı: alt ortadaki "Start Game" / "Select Server" yazısı. OCR olduğu için en fazla 8 sn'de bir bakılır. */
     private fun loginScreen(b: Bitmap): Boolean {
-        if (orangeFrac(b, 0.46f, 0.54f, 0.725f, 0.765f) < 0.2f) return false
+        val now = System.currentTimeMillis()
+        if (now - lastLoginChk < 8000L) return false
+        lastLoginChk = now
         val x0 = (0.30f * b.width).toInt()
         val y0 = (0.60f * b.height).toInt()
         val cr = Bitmap.createBitmap(b, x0, y0, (0.40f * b.width).toInt(), (0.20f * b.height).toInt())
@@ -670,27 +674,16 @@ class TimerService : AccessibilityService() {
     }
 
     /** Ölüm penceresindeki iki turuncu düğme (Free Revival, Respawn Now) görünüyor mu? Ucuz renk testi. */
+    /** Ölüm penceresindeki düğmelerin kahve-turuncu tonu (≈155,107,68). */
+    private fun isButtonBrown(c: Int): Boolean {
+        val r = Color.red(c)
+        val g = Color.green(c)
+        val b = Color.blue(c)
+        return r in 130..225 && g in 80..160 && b <= 110 && r - g >= 25 && g - b >= 20
+    }
+
     private fun deathScreen(b: Bitmap): Boolean {
-        fun frac(x0: Float, x1: Float): Float {
-            val xa = (x0 * b.width).toInt()
-            val xb = (x1 * b.width).toInt()
-            val ya = (0.57f * b.height).toInt()
-            val yb = (0.60f * b.height).toInt()
-            var hit = 0
-            var tot = 0
-            var y = ya
-            while (y < yb) {
-                var x = xa
-                while (x < xb) {
-                    tot++
-                    if (isOrange(b.getPixel(x, y))) hit++
-                    x += 3
-                }
-                y += 3
-            }
-            return if (tot == 0) 0f else hit.toFloat() / tot
-        }
-        return frac(0.385f, 0.475f) > 0.35f && frac(0.525f, 0.615f) > 0.35f
+        return brownFrac(b, 0.385f, 0.475f, 0.57f, 0.60f) > 0.3f && brownFrac(b, 0.525f, 0.615f, 0.57f, 0.60f) > 0.3f
     }
 
     /** Ölüm penceresinde 'Free Revival' yazısını OCR ile bulup dokunur; bulamazsa işaretli noktaya basar. */
