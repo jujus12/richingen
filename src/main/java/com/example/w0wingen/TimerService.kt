@@ -1761,8 +1761,15 @@ class TimerService : AccessibilityService() {
         }
     }
 
+    @Volatile private var lastWatch = 0L
+
     private fun idleTick() {
         val now = System.currentTimeMillis()
+        // Farmda/bekleyişte ölüm ve oyundan atılma ancak ekran görüntüsüyle anlaşılır: birkaç saniyede bir bak
+        if (now - lastWatch >= 4000L) {
+            lastWatch = now
+            shot()
+        }
         if (farming && on("potOn") && now - lastPot >= cfgI("potWatchSec", 60) * 1000L) {
             potCheckNow()
             return
