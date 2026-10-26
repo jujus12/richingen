@@ -253,9 +253,6 @@ class TimerService : AccessibilityService() {
     private var kills = 0
     private var deaths = 0
     private val golds = ArrayList<Gold>()
-    private val goldBlocked = HashMap<Long, Long>()
-    @Volatile private var currentGold = 0L
-    private var lastGoldId = 0L
     private var goldKills = 0
     private var goldWinOpen = false
     private var goldRadiusView: TextView? = null
@@ -1339,6 +1336,7 @@ class TimerService : AccessibilityService() {
             }
         }
         tapPx(tx, ty)
+        gameAuto = false
         pause(800)
         val arrive = cfgI("arrive", 45).toFloat()
         val limit = cfgI("walkTimeout", 90) * 1000L
@@ -1453,6 +1451,7 @@ class TimerService : AccessibilityService() {
         val need = ArrayList<String>()
         for (n in listOf("chat", "pmTab", "farmLink", "autoAtk", "shield")) if (!hasPt(n)) need.add(n)
         if (need.isNotEmpty()) fail("Önce 'Ayar' menüsünden işaretle: " + need.joinToString(", "))
+        goldHere = false
         closeMapIfOpen()
         setAuto(false)
         val fw = cfgI("farmWire", 3)
@@ -1635,7 +1634,6 @@ class TimerService : AccessibilityService() {
         for (n in listOf("chat", "pmTab", "autoAtk")) if (!hasPt(n) && !need.contains(n)) need.add(n)
         if (on("buffOn") && !hasPt("buffLink")) need.add("buffLink")
         if (on("goldOn")) {
-            if (goldSnapshot().isEmpty()) need.add("golden noktaları (Araçlar > Golden işaretle)")
             if (!hasPt("goldLink")) need.add("goldLink")
             val gm = goldMapName()
             if (gm.isNotEmpty() && mapInfo(gm).wires > 1) {
@@ -1713,12 +1711,9 @@ class TimerService : AccessibilityService() {
                     runBoss(due)
                     continue
                 }
-                if (on("goldOn")) {
-                    val g = nextGold()
-                    if (g != null) {
-                        runGold(g)
-                        continue
-                    }
+                if (on("goldOn") && System.currentTimeMillis() >= goldIdleUntil) {
+                    runGold()
+                    continue
                 }
                 if (on("farmOn") && !farming) {
                     doFarm()
@@ -1726,7 +1721,7 @@ class TimerService : AccessibilityService() {
                 }
                 idleTick()
             } catch (e: Revived) {
-                currentGold = 0L
+                goldHere = false
                 val dead = currentId
                 currentId = 0L
                 var skipped = ""
@@ -1749,10 +1744,7 @@ class TimerService : AccessibilityService() {
                 say("Canlandın, kaldığın işe dönülüyor")
             } catch (e: StepFail) {
                 fails++
-                if (currentGold != 0L) {
-                    goldBlocked[currentGold] = System.currentTimeMillis() + 90000L
-                    currentGold = 0L
-                }
+                goldHere = false
                 val id = currentId
                 if (id != 0L) {
                     blocked[id] = System.currentTimeMillis() + 90000L
@@ -1789,6 +1781,7 @@ class TimerService : AccessibilityService() {
 
     private fun runBoss(e: Entry) {
         currentId = e.id
+        goldHere = false
         ui { rebuildList() }
         if (farming) {
             setAuto(false)
@@ -2564,7 +2557,41 @@ class TimerService : AccessibilityService() {
         return r > 150 && g > 120 && b < 80 && r - b > 90
     }
 
-    /** Açık haritada canlı golden kafatası ikonları (Goldingen'deki tarama): boyut süzgeciyle yazılardan ayrılır. */
+    /** Kutu çekirdekli aşındırma/genişletme (erode=true: aşındır). Yazıların ince çizgilerini silmek için. */
+    private fun boxMorph(src: BooleanArray, w: Int, h: Int, r: Int, erode: Boolean): BooleanArray {
+        val full = 2 * r + 1
+        val tmp = BooleanArray(w * h)
+        val pre = IntArray(maxOf(w, h) + 1)
+        for (y in 0 until h) {
+            val base = y * w
+            pre[0] = 0
+            for (x in 0 until w) pre[x + 1] = pre[x] + (if (src[base + x]) 1 else 0)
+            for (x in 0 until w) {
+                val a = x - r
+                val b = x + r
+                tmp[base + x] = if (erode) (a >= 0 && b < w && pre[b + 1] - pre[a] == full)
+                else (pre[minOf(w, b + 1)] - pre[maxOf(0, a)] > 0)
+            }
+        }
+        val out = BooleanArray(w * h)
+        for (x in 0 until w) {
+            pre[0] = 0
+            for (y in 0 until h) pre[y + 1] = pre[y] + (if (tmp[y * w + x]) 1 else 0)
+            for (y in 0 until h) {
+                val a = y - r
+                val b = y + r
+                out[y * w + x] = if (erode) (a >= 0 && b < h && pre[b + 1] - pre[a] == full)
+                else (pre[minOf(h, b + 1)] - pre[maxOf(0, a)] > 0)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Açık haritada CANLI golden kafatası ikonları. Parlak sarı pikseller alınır (ölü ikonlar soluk olduğu için girmez),
+     * aşındırma yazıların ince çizgilerini siler, kalan kalın lekeler kafatasıdır; birbirine yakın parçalar birleştirilir.
+     * Yazılar kafatasına değse de bulunur.
+     */
     private fun scanSkulls(b: Bitmap): List<PointF> {
         val bw = b.width
         val bh = b.height
@@ -2575,62 +2602,71 @@ class TimerService : AccessibilityService() {
         val y1 = (MAP_Y1 * bh).toInt()
         val w = x1 - x0
         val h = y1 - y0
-        val cell = maxOf(2, Math.round(3 * s))
-        val cw = w / cell
-        val ch = h / cell
-        val cnt = IntArray(cw * ch)
+        val mask = BooleanArray(w * h)
         val row = IntArray(w)
         for (y in 0 until h) {
             b.getPixels(row, 0, w, x0, y0 + y, w, 1)
-            val cy = y / cell
-            for (x in 0 until w) {
-                if (isGold(row[x])) {
-                    val cx = x / cell
-                    if (cx < cw && cy < ch) cnt[cy * cw + cx]++
-                }
-            }
+            for (x in 0 until w) if (isGold(row[x])) mask[y * w + x] = true
         }
-        val need = maxOf(2, cell * cell / 4)
-        val hit = BooleanArray(cw * ch)
-        for (i in hit.indices) hit[i] = cnt[i] >= need
-        val seen = BooleanArray(cw * ch)
-        val stack = IntArray(cw * ch)
-        val out = ArrayList<PointF>()
-        for (start in hit.indices) {
-            if (!hit[start] || seen[start]) continue
+        val r = maxOf(1, Math.round(2 * s))
+        val open = boxMorph(boxMorph(mask, w, h, r, true), w, h, r, false)
+        val stack = IntArray(w * h)
+        val cx = ArrayList<Float>()
+        val cy = ArrayList<Float>()
+        val cn = ArrayList<Int>()
+        for (start in open.indices) {
+            if (!open[start]) continue
             var sp = 0
             stack[sp++] = start
-            seen[start] = true
-            var minX = cw
-            var maxX = -1
-            var minY = ch
-            var maxY = -1
+            open[start] = false
             var n = 0
+            var sx = 0L
+            var sy = 0L
             while (sp > 0) {
                 val cur = stack[--sp]
-                val cx = cur % cw
-                val cy = cur / cw
+                val px = cur % w
+                val py = cur / w
                 n++
-                if (cx < minX) minX = cx
-                if (cx > maxX) maxX = cx
-                if (cy < minY) minY = cy
-                if (cy > maxY) maxY = cy
+                sx += px
+                sy += py
                 for (dy in -1..1) for (dx in -1..1) {
-                    val nx = cx + dx
-                    val ny = cy + dy
-                    if (nx < 0 || ny < 0 || nx >= cw || ny >= ch) continue
-                    val ni = ny * cw + nx
-                    if (hit[ni] && !seen[ni]) {
-                        seen[ni] = true
+                    if (dx == 0 && dy == 0) continue
+                    val nx = px + dx
+                    val ny = py + dy
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue
+                    val ni = ny * w + nx
+                    if (open[ni]) {
+                        open[ni] = false
                         stack[sp++] = ni
                     }
                 }
             }
-            val pw = (maxX - minX + 1) * cell
-            val ph = (maxY - minY + 1) * cell
-            val area = n * cell * cell
-            if (pw >= 24 * s && pw <= 46 * s && ph >= 27 * s && ph <= 48 * s && area >= 450 * s * s) {
-                out.add(PointF(x0 + (minX + maxX + 1) * cell / 2f, y0 + (minY + maxY + 1) * cell / 2f))
+            if (n >= 40 * s * s) {
+                cx.add(sx.toFloat() / n)
+                cy.add(sy.toFloat() / n)
+                cn.add(n)
+            }
+        }
+        // bir kafatası genelde iki parçaya ayrılır (göz çukurları): yakın parçaları birleştir
+        val out = ArrayList<PointF>()
+        val wt = ArrayList<Int>()
+        for (i in cx.indices) {
+            var j = -1
+            for (k in out.indices) {
+                val dx = out[k].x - (x0 + cx[i])
+                val dy = out[k].y - (y0 + cy[i])
+                if (Math.sqrt((dx * dx + dy * dy).toDouble()) < 30 * s) {
+                    j = k
+                    break
+                }
+            }
+            if (j < 0) {
+                out.add(PointF(x0 + cx[i], y0 + cy[i]))
+                wt.add(cn[i])
+            } else {
+                val t = wt[j] + cn[i]
+                out[j] = PointF((out[j].x * wt[j] + (x0 + cx[i]) * cn[i]) / t, (out[j].y * wt[j] + (y0 + cy[i]) * cn[i]) / t)
+                wt[j] = t
             }
         }
         return out
@@ -2704,11 +2740,15 @@ class TimerService : AccessibilityService() {
      * önce seçilen wire'a geçer, sonra chat'ten golden bağlantısına tıklar, varınca wire'ı doğrular.
      */
     private fun ensureGoldMap() {
-        val gm = goldMapName()
-        if (gm.isEmpty()) fail("Golden haritası belli değil. Önce 'Golden işaretle' ile nokta kaydet.")
+        var gm = goldMapName()
         val gw = cfgI("goldWire", 3)
         closeMapIfOpen()
         var cur = readMapWireRetry()
+        if (gm.isEmpty()) {
+            gm = cur.first
+            prefs().edit().putString("goldMap", gm).apply()
+            say("Golden haritası: " + gm + " (şu an bulunduğun harita)")
+        }
         if (key(cur.first) == key(gm)) {
             if (mapInfo(gm).wires > 1 && cur.second != gw) {
                 say("Golden için Wire " + gw + " seçiliyor")
@@ -2731,66 +2771,96 @@ class TimerService : AccessibilityService() {
         }
     }
 
-    /** Sıradaki golden: işaretlenenler arasında dönerek, yakın zamanda "yok" çıkanları atlayarak. */
-    private fun nextGold(): Gold? {
-        val list = goldSnapshot().sortedBy { it.id }
-        if (list.isEmpty()) return null
-        val now = System.currentTimeMillis()
-        val start = list.indexOfFirst { it.id == lastGoldId }
-        for (k in 1..list.size) {
-            val g = list[(start + k) % list.size]
-            if ((goldBlocked[g.id] ?: 0L) > now) continue
-            return g
-        }
-        return null
-    }
+    private val goldSkip = ArrayList<Pair<PointF, Long>>()
+    @Volatile private var goldIdleUntil = 0L
+    @Volatile private var goldHere = false
 
-    private fun runGold(g: Gold) {
-        currentGold = g.id
-        lastGoldId = g.id
-        val ok = goldKill(g)
-        currentGold = 0L
-        if (ok) {
-            fails = 0
-            potCheckNow()
-        } else {
-            goldBlocked[g.id] = System.currentTimeMillis() + cfgI("goldRetry", 60) * 1000L
-        }
+    /** Otomasyondan: bir golden turu; hiç golden bulunamazsa bir süre golden'a bakmaz. */
+    private fun runGold() {
+        if (goldCycle(null)) fails = 0
+        else goldIdleUntil = System.currentTimeMillis() + cfgI("goldRetry", 15) * 1000L
     }
 
     /**
-     * İşaretli golden'a gider (gerekirse ışınlanır, Random ile yaklaşır, yürür), oto atak açar, ölünce true döner.
-     * Haritada orada golden görünmüyorsa (ölü ya da doğmamış) false döner. Boss zamanı gelirse bırakıp true döner.
+     * Bir golden turu: haritayı aç, canlı golden'ları tara, en yakınını seç (Random açıksa yarıçap içine girene kadar Random),
+     * yürü, oto atak aç, ölünce true. Golden hiç görünmüyorsa false. İşaretli nokta varsa yalnızca onlara gidilir.
+     * only verilirse sadece o işaretli noktaya gidilir (listeden dokunuş).
      */
-    private fun goldKill(g: Gold): Boolean {
-        say("Golden: " + goldTitle(g))
+    private fun goldCycle(only: Gold?): Boolean {
         if (farming) {
             setAuto(false)
             farming = false
         }
-        ensureGoldMap()
-        val mb = ensureMap()
+        if (!goldHere) {
+            ensureGoldMap()
+            goldHere = true
+        }
+        var mb = ensureMap()
         refreshScreen()
         val sc = mb.width / 2560f
-        val target = PointF(g.px * screenW, g.py * screenH)
-        var alive = false
-        for (k in scanSkulls(mb)) if (dist(k, target) <= 45f * sc) alive = true
-        if (!alive) {
-            tapPoint("closeMap")
-            pause(600)
-            say(goldTitle(g) + " haritada görünmüyor (ölü ya da doğmamış)")
-            return false
+        val marks = (if (only != null) listOf(only) else goldSnapshot()).map { PointF(it.px * screenW, it.py * screenH) }
+        val radius = cfgI("goldRadius", 150).toFloat()
+        val useRandom = on("goldRandomOn") && radius > 0f && hasPt("random")
+        val maxTry = cfgI("randomMax", 40)
+        var tries = 0
+        var best: PointF? = null
+        var bd = Float.MAX_VALUE
+        while (true) {
+            val now = System.currentTimeMillis()
+            goldSkip.removeAll { it.second < now }
+            val me = findPlayer(mb)
+            best = null
+            bd = Float.MAX_VALUE
+            for (k in scanSkulls(mb)) {
+                if (marks.isNotEmpty() && marks.none { dist(it, k) <= 45f * sc }) continue
+                if (goldSkip.any { dist(it.first, k) <= 30f * sc }) continue
+                val d = if (me != null) dist(me, k) else 0f
+                if (d < bd) {
+                    bd = d
+                    best = k
+                }
+            }
+            if (best == null) {
+                if (useRandom && tries < maxTry) {
+                    tries++
+                    say("Golden görünmüyor, Random " + tries + "/" + maxTry)
+                    tapPoint("random")
+                    gameAuto = false
+                    pause((cfgF("randomWait", 2.5f) * 1000).toInt())
+                    mb = ensureMap()
+                    continue
+                }
+                tapPoint("closeMap")
+                pause(600)
+                say("Golden görünmüyor")
+                return false
+            }
+            if (!useRandom || me == null || bd <= radius || tries >= maxTry) break
+            tries++
+            say("En yakın golden " + bd.toInt() + " px uzakta, Random " + tries + "/" + maxTry)
+            tapPoint("random")
+            gameAuto = false
+            pause((cfgF("randomWait", 2.5f) * 1000).toInt())
+            mb = ensureMap()
         }
-        approach(mb, g.px, g.py, goldTitle(g), cfgI("goldRadius", 150).toFloat(), on("goldRandomOn"))
+        val tgt = best!!
+        val label = "Golden (" + (if (bd < Float.MAX_VALUE / 2) bd.toInt().toString() + " px" else "?") + ")"
+        try {
+            approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
+        } catch (e: StepFail) {
+            goldSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
+            return true
+        }
+        gameAuto = false
         setAuto(true)
-        say(goldTitle(g) + "\nOto atak açık, golden bekleniyor")
+        say(label + "\nOto atak açık, golden bekleniyor")
         val t0 = System.currentTimeMillis()
         val limit = cfgI("fightTimeout", 300) * 1000L
         var seen = false
         var dead = 0
         var lastMapChk = t0
         while (true) {
-            pause(1500)
+            pause(700)
             if (autoRunning && nextDue() != null) {
                 setAuto(false)
                 say("Boss zamanı geldi, golden bırakıldı")
@@ -2806,32 +2876,33 @@ class TimerService : AccessibilityService() {
             if (miniGoldAlive(b)) {
                 seen = true
                 dead = 0
-                say(goldTitle(g) + "\nGolden canlı, savaşılıyor")
+                say(label + "\nGolden canlı, savaşılıyor")
             } else if (seen) {
                 dead++
-                say(goldTitle(g) + "\nGolden öldü mü? " + dead + "/3")
+                say(label + "\nGolden öldü mü? " + dead + "/3")
                 if (dead >= 3) break
             } else if (now - t0 > 8000 && now - lastMapChk > 10000) {
                 lastMapChk = now
                 val mb2 = ensureMap()
                 var still = false
-                for (k in scanSkulls(mb2)) if (dist(k, target) < 35f * sc) still = true
+                for (k in scanSkulls(mb2)) if (dist(k, tgt) < 35f * sc) still = true
                 val me = findPlayer(mb2)
-                val onTop = me != null && dist(me, target) <= cfgI("arrive", 45) * 1.5f
+                val onTop = me != null && dist(me, tgt) <= cfgI("arrive", 45) * 1.5f
                 tapPoint("closeMap")
                 pause(700)
                 if (!still && !onTop) break
             }
             if (now - t0 > limit) {
+                goldSkip.add(Pair(tgt, System.currentTimeMillis() + 120000L))
                 setAuto(false)
-                say("Golden zaman aşımı: " + goldTitle(g))
-                return false
+                say("Golden zaman aşımı, bu nokta atlandı")
+                return true
             }
         }
         goldKills++
-        ev("Golden kesildi: " + goldTitle(g))
-        setAuto(false)
-        say("Golden kesildi: " + goldTitle(g))
+        ev("Golden kesildi")
+        say("Golden kesildi, sıradakine geçiliyor")
+        potCheckNow()
         return true
     }
 
@@ -2998,7 +3069,7 @@ class TimerService : AccessibilityService() {
         head.addView(mkBtn("Kapat ✕") { closeBossWin() }, LinearLayout.LayoutParams(dp(90), dp(36)))
         outer.addView(head)
         val hint = TextView(this)
-        hint.text = "Satıra dokun: gidip kes. Silmek için ✕'e uzun bas. Yeni nokta: Araçlar > Golden işaretle."
+        hint.text = "İşaretli nokta varsa otomasyon yalnızca onlara gider; hiç yoksa haritadaki tüm canlı golden'lara gider (en yakından). Satıra dokun: sadece oraya git."
         hint.textSize = 11f
         hint.setTextColor(TEXT_DIM)
         hint.setPadding(0, dp(4), 0, dp(4))
@@ -3024,10 +3095,10 @@ class TimerService : AccessibilityService() {
             val left = LinearLayout(this)
             left.orientation = LinearLayout.VERTICAL
             val n1 = TextView(this)
-            n1.text = (if (g.id == currentGold) "▶ " else "") + goldTitle(g)
+            n1.text = goldTitle(g)
             n1.textSize = 15f
             n1.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            n1.setTextColor(if (g.id == currentGold) ACCENT else Color.WHITE)
+            n1.setTextColor(Color.WHITE)
             left.addView(n1)
             val n2 = TextView(this)
             n2.text = goldMapName() + " · Golden " + g.idx
@@ -3053,7 +3124,7 @@ class TimerService : AccessibilityService() {
                     say("Otomasyon açık. Önce otomasyonu durdur.")
                 } else {
                     closeBossWin()
-                    runManual { goldKill(g) }
+                    runManual { goldCycle(g) }
                 }
             }
             val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)

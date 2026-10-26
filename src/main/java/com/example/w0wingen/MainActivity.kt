@@ -66,7 +66,7 @@ class MainActivity : Activity() {
     private val goldFields = listOf(
         Field("goldWire", "Golden wire", "Golden kesilecek wire (farm ve buff gibi önce bu wire'a geçilir)", "3"),
         Field("goldRadius", "Golden Random yarıçapı", "Golden noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
-        Field("goldRetry", "Golden yeniden deneme", "Haritada görünmeyen golden noktası bu kadar saniye atlanır (sn)", "60")
+        Field("goldRetry", "Golden yeniden bakma", "Haritada hiç canlı golden görünmezse bu kadar saniye sonra tekrar bakılır; bu arada farm/bekleme (sn)", "15")
     )
 
     private val BG = 0xFF0F1115.toInt()
