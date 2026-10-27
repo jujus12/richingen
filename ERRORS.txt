@@ -1,0 +1,14 @@
+> Task :compileDebugKotlin FAILED
+e: file:///home/runner/work/richingen/richingen/src/main/java/com/example/w0wingen/MainActivity.kt:162:13 Conflicting declarations: val ph: LinearLayout, val ph: TextView
+e: file:///home/runner/work/richingen/richingen/src/main/java/com/example/w0wingen/MainActivity.kt:219:13 Conflicting declarations: val ph: LinearLayout, val ph: TextView
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run-1793080454713.json
+
+FAILURE: Build failed with an exception.
+--
+* What went wrong:
+Execution failed for task ':compileDebugKotlin'.
+> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+   > Compilation error. See log for more details
+--
+BUILD FAILED in 35s
+30 actionable tasks: 30 executed
