@@ -216,11 +216,11 @@ class MainActivity : Activity() {
         col.addView(save, lp(dp(6)))
 
         val profCard = card(col, "Profiller")
-        val ph = TextView(this)
-        ph.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Oto sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
-        ph.textSize = 11f
-        ph.setTextColor(DIM)
-        profCard.addView(ph)
+        val profHint = TextView(this)
+        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Oto sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
+        profHint.textSize = 11f
+        profHint.setTextColor(DIM)
+        profCard.addView(profHint)
         profName = EditText(this)
         profName.hint = "Profil adı (örn. Boss gecesi)"
         profName.setTextColor(Color.WHITE)
