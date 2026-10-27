@@ -65,6 +65,9 @@ class TimerService : AccessibilityService() {
     /** İşaretlenmiş altın (golden) canavar noktası (ekran oranı). Golden haritası tek: goldMap ayarında tutulur. */
     private class Gold(val id: Long, var idx: Int, val px: Float, val py: Float)
 
+    /** İşaretlenmiş red boss noktası (ekran oranı). Red boss haritası tek: redMap ayarında; süre kaydedilmez. */
+    private class Red(val id: Long, var idx: Int, val px: Float, val py: Float)
+
     private class Entry(
         val id: Long,
         val map: String,
@@ -111,7 +114,7 @@ class TimerService : AccessibilityService() {
             "2 · Harita" to listOf("minimap", "closeMap", "random"),
             "3 · Chat" to listOf("chat", "pmTab", "closeChat"),
             "5 · Wire (sadece Raklion'lar)" to listOf("switchBtn", "wire1", "wire2", "wire3", "switchOk"),
-            "6 · Farm ve savaş düğmeleri" to listOf("autoAtk", "shield", "imp", "angel", "revive", "goldLink"),
+            "6 · Farm ve savaş düğmeleri" to listOf("autoAtk", "shield", "imp", "angel", "revive", "goldLink", "redLink"),
             "7 · Envanter, pot, Recycle" to listOf(
                 "inventory", "shopTab", "purchaseHP", "purchaseMP", "hpCount", "mpCount",
                 "recycleTab", "recycleBtn", "closeRight", "closeLeft"
@@ -141,6 +144,7 @@ class TimerService : AccessibilityService() {
             "autoAtk" to "Sağdaki Auto (oto saldırı) düğmesi",
             "shield" to "Kalkan düğmesi (farm konumuna varınca basılır)",
             "goldLink" to "PM'de GOLDEN haritasının ışınlanma bağlantısı (golden açıksa; tek koordinat)",
+            "redLink" to "PM'de RED BOSS haritasının (VIP Domain) ışınlanma bağlantısı (red boss açıksa; tek koordinat)",
             "imp" to "Imp düğmesi (alt çubukta pot yanında, farm konumuna varınca basılır)",
             "angel" to "Angel düğmesi (alt çubukta pot yanında, bossu keserken basılır)",
             "revive" to "Free Revival düğmesi (isteğe bağlı: yazı okunamazsa buraya basılır; ölüm ekranı açıkken işaretle)",
@@ -197,7 +201,9 @@ class TimerService : AccessibilityService() {
             Triple("buffOn", "Buff", false),
             Triple("randomOn", "Random", true),
             Triple("goldOn", "Golden", false),
-            Triple("goldRandomOn", "G·Rnd", false)
+            Triple("goldRandomOn", "G·Rnd", false),
+            Triple("redOn", "Red boss", false),
+            Triple("redRandomOn", "R·Rnd", false)
         )
 
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
@@ -302,6 +308,10 @@ class TimerService : AccessibilityService() {
     private var deaths = 0
     @Volatile private var lastLoginChk = 0L
     private val golds = ArrayList<Gold>()
+    private val reds = ArrayList<Red>()
+    private var redKills = 0
+    private var redWinOpen = false
+    private var redRadiusView: TextView? = null
     private var goldKills = 0
     private var goldWinOpen = false
     private var stampWinOpen = false
@@ -348,6 +358,7 @@ class TimerService : AccessibilityService() {
         refreshScreen()
         loadEntries()
         loadGolds()
+        loadReds()
         buildUi()
         rebuildList()
         main.postDelayed(ticker, 1000)
@@ -1526,6 +1537,7 @@ class TimerService : AccessibilityService() {
         for (n in listOf("chat", "pmTab", "farmLink", "autoAtk", "shield")) if (!hasPt(n)) need.add(n)
         if (need.isNotEmpty()) fail("Önce 'Ayar' menüsünden işaretle: " + need.joinToString(", "))
         goldHere = false
+        redHere = false
         closeMapIfOpen()
         setAuto(false)
         val fw = cfgI("farmWire", 3)
@@ -1716,6 +1728,7 @@ class TimerService : AccessibilityService() {
                 if (!hasPt("switchBtn")) need.add("switchBtn")
             }
         }
+        if (on("redOn") && !hasPt("redLink")) need.add("redLink")
         val maps = ArrayList<String>()
         for (e in snapshot()) maps.add(e.map)
         for (m in maps) {
@@ -1790,6 +1803,10 @@ class TimerService : AccessibilityService() {
                     runGold()
                     continue
                 }
+                if (on("redOn") && System.currentTimeMillis() >= redIdleUntil) {
+                    runRed()
+                    continue
+                }
                 if (on("farmOn") && !farming) {
                     doFarm()
                     fails = 0
@@ -1797,6 +1814,7 @@ class TimerService : AccessibilityService() {
                 idleTick()
             } catch (e: Revived) {
                 goldHere = false
+                redHere = false
                 val dead = currentId
                 currentId = 0L
                 var skipped = ""
@@ -1820,6 +1838,7 @@ class TimerService : AccessibilityService() {
             } catch (e: StepFail) {
                 fails++
                 goldHere = false
+                redHere = false
                 val id = currentId
                 if (id != 0L) {
                     blocked[id] = System.currentTimeMillis() + 90000L
@@ -1930,6 +1949,7 @@ class TimerService : AccessibilityService() {
     private fun runBoss(e: Entry) {
         currentId = e.id
         goldHere = false
+        redHere = false
         ui { rebuildList() }
         if (farming) {
             setAuto(false)
@@ -2188,6 +2208,12 @@ class TimerService : AccessibilityService() {
         panel?.alpha = v / 100f
     }
 
+    private fun changeRedRadius(delta: Int) {
+        val v = (cfgI("redRadius", 150) + delta).coerceIn(0, 1000)
+        prefs().edit().putString("cfg_redRadius", v.toString()).apply()
+        redRadiusView?.text = v.toString()
+    }
+
     private fun changeGoldRadius(delta: Int) {
         val v = (cfgI("goldRadius", 150) + delta).coerceIn(0, 1000)
         prefs().edit().putString("cfg_goldRadius", v.toString()).apply()
@@ -2226,6 +2252,7 @@ class TimerService : AccessibilityService() {
         updateProfileBtn()
         radiusView?.text = cfgI("radius", 200).toString()
         goldRadiusView?.text = cfgI("goldRadius", 150).toString()
+        redRadiusView?.text = cfgI("redRadius", 150).toString()
         gapView?.text = String.format("%.2f", gap() / 1000f)
         say("Profil yüklendi: " + next)
         toast("Profil: " + next)
@@ -2418,7 +2445,7 @@ class TimerService : AccessibilityService() {
         pbl.topMargin = dp(6)
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
-        togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "randomOn"))
+        togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "randomOn"))
         togGroup("BAKIM", listOf("potOn", "recycleOn", "buffOn"))
         togGroup("SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
@@ -2462,6 +2489,14 @@ class TimerService : AccessibilityService() {
             dp(36)
         )
         tb.addView(r4, rlp)
+        val r5 = btnRow(
+            listOf<Pair<String, () -> Unit>>(
+                "Red işaretle" to { runManual { redMark() } },
+                "Red listesi" to { toggleRedWin() }
+            ),
+            dp(36)
+        )
+        tb.addView(r5, rlp)
         val rr = LinearLayout(this)
         rr.orientation = LinearLayout.HORIZONTAL
         rr.gravity = Gravity.CENTER_VERTICAL
@@ -2498,6 +2533,24 @@ class TimerService : AccessibilityService() {
         gq.addView(gqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         gq.addView(mkBtn("+") { changeGoldRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         tb.addView(gq, rlp)
+        val rq = LinearLayout(this)
+        rq.orientation = LinearLayout.HORIZONTAL
+        rq.gravity = Gravity.CENTER_VERTICAL
+        val rql = TextView(this)
+        rql.text = "Red boss Random yarıçap (px)"
+        rql.textSize = 11f
+        rql.setTextColor(Color.WHITE)
+        rq.addView(rql, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val rqv = TextView(this)
+        rqv.text = cfgI("redRadius", 150).toString()
+        rqv.textSize = 13f
+        rqv.gravity = Gravity.CENTER
+        rqv.setTextColor(ACCENT)
+        redRadiusView = rqv
+        rq.addView(mkBtn("−") { changeRedRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+        rq.addView(rqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
+        rq.addView(mkBtn("+") { changeRedRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+        tb.addView(rq, rlp)
         val gr = LinearLayout(this)
         gr.orientation = LinearLayout.HORIZONTAL
         gr.gravity = Gravity.CENTER_VERTICAL
@@ -2667,8 +2720,9 @@ class TimerService : AccessibilityService() {
         if (bossWin != null) {
             val gw = goldWinOpen
             val sw = stampWinOpen
+            val rw = redWinOpen
             closeBossWin()
-            if (sw) toggleStampWin() else if (gw) toggleGoldWin() else toggleBossWin()
+            if (sw) toggleStampWin() else if (rw) toggleRedWin() else if (gw) toggleGoldWin() else toggleBossWin()
         }
         val l = listCol ?: return
         l.removeAllViews()
@@ -2779,6 +2833,7 @@ class TimerService : AccessibilityService() {
         }
         bossWin = null
         goldWinOpen = false
+        redWinOpen = false
         stampWinOpen = false
         winTimers.clear()
     }
@@ -2893,6 +2948,14 @@ class TimerService : AccessibilityService() {
         return r >= 150 && g >= 110 && b <= 120 && r - b >= 70 && r >= g && g > b
     }
 
+    /** Haritadaki canlı red boss ikonu: parlak kırmızı/turuncu-kırmızı (sarıdan ayrıdır: yeşil bileşeni düşük). */
+    private fun isRedIcon(c: Int): Boolean {
+        val r = Color.red(c)
+        val g = Color.green(c)
+        val b = Color.blue(c)
+        return r >= 165 && b <= 90 && g in 20..100 && r - g >= 100 && r - b >= 100
+    }
+
     private fun isMiniGold(c: Int): Boolean {
         val r = Color.red(c)
         val g = Color.green(c)
@@ -2935,7 +2998,7 @@ class TimerService : AccessibilityService() {
      * aşındırma yazıların ince çizgilerini siler, kalan kalın lekeler kafatasıdır; birbirine yakın parçalar birleştirilir.
      * Yazılar kafatasına değse de bulunur.
      */
-    private fun scanSkulls(b: Bitmap): List<PointF> {
+    private fun scanSkulls(b: Bitmap, pred: (Int) -> Boolean = { isGold(it) }): List<PointF> {
         val bw = b.width
         val bh = b.height
         val s = bw / 2560f
@@ -2949,7 +3012,7 @@ class TimerService : AccessibilityService() {
         val row = IntArray(w)
         for (y in 0 until h) {
             b.getPixels(row, 0, w, x0, y0 + y, w, 1)
-            for (x in 0 until w) if (isGold(row[x])) mask[y * w + x] = true
+            for (x in 0 until w) if (pred(row[x])) mask[y * w + x] = true
         }
         val r = maxOf(1, Math.round(2 * s))
         val open = boxMorph(boxMorph(mask, w, h, r, true), w, h, r, false)
@@ -3120,6 +3183,7 @@ class TimerService : AccessibilityService() {
 
     /** Otomasyondan: bir golden turu; hiç golden bulunamazsa bir süre golden'a bakmaz. */
     private fun runGold() {
+        redHere = false
         if (goldCycle(null)) fails = 0
         else goldIdleUntil = System.currentTimeMillis() + cfgI("goldRetry", 15) * 1000L
     }
@@ -3485,6 +3549,479 @@ class TimerService : AccessibilityService() {
     }
 
 
+    // ------------------------------------------------------------------ red bosslar (VIP Domain; süre kaydı yok)
+
+    /** Mini haritanın ortasında parlak sarı red boss ikonu var mı (Redingen'deki ölüm tespiti). */
+    private fun miniRedAlive(b: Bitmap): Boolean {
+        val a = pt("miniTL")
+        val c = pt("miniBR")
+        val cxm = (a.first + c.first) / 2f
+        val cym = (a.second + c.second) / 2f
+        val hw = (c.first - a.first) / 2f * 0.6f
+        val hh = (c.second - a.second) / 2f * 0.6f
+        val x0 = maxOf(0, ((cxm - hw) * b.width).toInt())
+        val x1 = minOf(b.width - 1, ((cxm + hw) * b.width).toInt())
+        val y0 = maxOf(0, ((cym - hh) * b.height).toInt())
+        val y1 = minOf(b.height - 1, ((cym + hh) * b.height).toInt())
+        if (x1 <= x0 || y1 <= y0) return false
+        val w = x1 - x0 + 1
+        val row = IntArray(w)
+        var hit = 0
+        for (y in y0..y1) {
+            b.getPixels(row, 0, w, x0, y, w, 1)
+            for (x in 0 until w) if (isBossRed(row[x])) hit++
+        }
+        return hit.toFloat() / (w * (y1 - y0 + 1)) >= 0.0012f
+    }
+
+    private fun loadReds() {
+        synchronized(lock) {
+            reds.clear()
+            try {
+                val a = JSONArray(prefs().getString("reds", "[]") ?: "[]")
+                for (i in 0 until a.length()) {
+                    val o = a.getJSONObject(i)
+                    reds.add(Red(o.getLong("id"), o.optInt("idx", reds.size + 1),
+                        o.getDouble("px").toFloat(), o.getDouble("py").toFloat()))
+                    if (!prefs().contains("redMap") && o.has("map")) prefs().edit().putString("redMap", o.getString("map")).apply()
+                }
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    private fun saveReds() {
+        val a = JSONArray()
+        synchronized(lock) {
+            for (g in reds) {
+                val o = JSONObject()
+                o.put("id", g.id)
+                o.put("idx", g.idx)
+                o.put("px", g.px.toDouble())
+                o.put("py", g.py.toDouble())
+                a.put(o)
+            }
+        }
+        prefs().edit().putString("reds", a.toString()).apply()
+    }
+
+    private fun redSnapshot(): List<Red> = synchronized(lock) { ArrayList(reds) }
+
+    private fun redMapName(): String = prefs().getString("redMap", "") ?: ""
+
+    private fun redTitle(g: Red): String {
+        val m = redMapName()
+        return (if (m.isEmpty()) "Red boss" else shortMap(m)) + " · R#" + g.idx
+    }
+
+    /**
+     * Red boss haritasına gelir. Zaten o haritadaysa ve wire doğruysa bir şey yapmaz. Değilse farm/buff gibi:
+     * önce seçilen wire'a geçer, sonra chat'ten red boss bağlantısına tıklar, varınca wire'ı doğrular.
+     */
+    private fun ensureRedMap() {
+        var gm = redMapName()
+        val gw = cfgI("redWire", 1)
+        closeMapIfOpen()
+        var cur = readMapWireRetry()
+        if (gm.isEmpty()) {
+            gm = cur.first
+            prefs().edit().putString("redMap", gm).apply()
+            say("Red boss haritası: " + gm + " (şu an bulunduğun harita)")
+        }
+        if (key(cur.first) == key(gm)) {
+            if (mapInfo(gm).wires > 1 && cur.second != gw) {
+                say("Red boss için Wire " + gw + " seçiliyor")
+                if (!switchTo(gw)) fail("Wire değişmedi (istenen Wire " + gw + ")")
+            }
+            return
+        }
+        if (!hasPt("redLink")) fail("Önce 'Ayar' menüsünden işaretle: redLink")
+        if (mapInfo(cur.first).wires > 1 && cur.second != gw) {
+            say("Red boss için Wire " + gw + " seçiliyor")
+            switchTo(gw)
+        }
+        say("Red boss haritasına gidiliyor")
+        openChatLink("redLink")
+        pause(cfgI("mapTravel", 10) * 1000)
+        cur = readMapWireRetry()
+        if (key(cur.first) != key(gm)) fail("Red boss haritasına ışınlanılamadı, şu an: " + cur.first)
+        if (mapInfo(gm).wires > 1 && cur.second != gw) {
+            if (!switchTo(gw)) fail("Wire değişmedi (istenen Wire " + gw + ")")
+        }
+    }
+
+    private val redSkip = ArrayList<Pair<PointF, Long>>()
+    @Volatile private var redIdleUntil = 0L
+    @Volatile private var redHere = false
+
+    /** Otomasyondan: bir red boss turu; hiç red boss bulunamazsa bir süre red boss'a bakmaz. */
+    private fun runRed() {
+        goldHere = false
+        if (redCycle(null)) fails = 0
+        else redIdleUntil = System.currentTimeMillis() + cfgI("redRetry", 15) * 1000L
+    }
+
+    /**
+     * Bir red boss turu: haritayı aç, canlı red boss'ları tara, en yakınını seç (Random açıksa yarıçap içine girene kadar Random),
+     * yürü, oto atak aç, ölünce true. Red boss hiç görünmüyorsa false. İşaretli nokta varsa yalnızca onlara gidilir.
+     * only verilirse sadece o işaretli noktaya gidilir (listeden dokunuş).
+     */
+    private fun redCycle(only: Red?): Boolean {
+        if (farming) {
+            setAuto(false)
+            farming = false
+        }
+        if (!redHere) {
+            ensureRedMap()
+            redHere = true
+        }
+        var mb = ensureMap()
+        refreshScreen()
+        val sc = mb.width / 2560f
+        val marks = (if (only != null) listOf(only) else redSnapshot()).map { PointF(it.px * screenW, it.py * screenH) }
+        val radius = cfgI("redRadius", 150).toFloat()
+        val useRandom = on("redRandomOn") && radius > 0f && hasPt("random")
+        val maxTry = cfgI("randomMax", 40)
+        var tries = 0
+        var best: PointF? = null
+        var bd = Float.MAX_VALUE
+        while (true) {
+            val now = System.currentTimeMillis()
+            redSkip.removeAll { it.second < now }
+            val me = findPlayer(mb)
+            best = null
+            bd = Float.MAX_VALUE
+            for (k in scanSkulls(mb) { isRedIcon(it) }) {
+                if (marks.isNotEmpty() && marks.none { dist(it, k) <= 45f * sc }) continue
+                if (redSkip.any { dist(it.first, k) <= 30f * sc }) continue
+                val d = if (me != null) dist(me, k) else 0f
+                if (d < bd) {
+                    bd = d
+                    best = k
+                }
+            }
+            if (best == null) {
+                if (useRandom && tries < maxTry) {
+                    tries++
+                    say("Red boss görünmüyor, Random " + tries + "/" + maxTry)
+                    tapPoint("random")
+                    gameAuto = false
+                    pause((cfgF("randomWait", 2.5f) * 1000).toInt())
+                    mb = ensureMap()
+                    continue
+                }
+                tapPoint("closeMap")
+                pause(600)
+                say("Red boss görünmüyor")
+                return false
+            }
+            if (!useRandom || me == null || bd <= radius || tries >= maxTry) break
+            tries++
+            say("En yakın red boss " + bd.toInt() + " px uzakta, Random " + tries + "/" + maxTry)
+            tapPoint("random")
+            gameAuto = false
+            pause((cfgF("randomWait", 2.5f) * 1000).toInt())
+            mb = ensureMap()
+        }
+        val tgt = best!!
+        val label = "Red boss (" + (if (bd < Float.MAX_VALUE / 2) bd.toInt().toString() + " px" else "?") + ")"
+        try {
+            approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
+        } catch (e: StepFail) {
+            redSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
+            return true
+        }
+        gameAuto = false
+        setAuto(true)
+        say(label + "\nOto atak açık, red boss bekleniyor")
+        val t0 = System.currentTimeMillis()
+        val limit = cfgI("fightTimeout", 300) * 1000L
+        var seen = false
+        var dead = 0
+        var lastMapChk = t0
+        while (true) {
+            pause(700)
+            if (autoRunning && nextDue() != null) {
+                setAuto(false)
+                say("Boss zamanı geldi, red boss bırakıldı")
+                return true
+            }
+            val b = shot() ?: continue
+            if (orangeAt(b, "closeMap")) {
+                tapPoint("closeMap")
+                pause(600)
+                continue
+            }
+            val now = System.currentTimeMillis()
+            if (miniRedAlive(b)) {
+                seen = true
+                dead = 0
+                say(label + "\nRed boss canlı, savaşılıyor")
+            } else if (seen) {
+                dead++
+                say(label + "\nRed boss öldü mü? " + dead + "/3")
+                if (dead >= 3) break
+            } else if (now - t0 > 8000 && now - lastMapChk > 10000) {
+                lastMapChk = now
+                val mb2 = ensureMap()
+                var still = false
+                for (k in scanSkulls(mb2) { isRedIcon(it) }) if (dist(k, tgt) < 35f * sc) still = true
+                val me = findPlayer(mb2)
+                val onTop = me != null && dist(me, tgt) <= cfgI("arrive", 45) * 1.5f
+                tapPoint("closeMap")
+                pause(700)
+                if (!still && !onTop) break
+            }
+            if (now - t0 > limit) {
+                redSkip.add(Pair(tgt, System.currentTimeMillis() + 120000L))
+                setAuto(false)
+                say("Red boss zaman aşımı, bu nokta atlandı")
+                return true
+            }
+        }
+        redKills++
+        ev("Red boss kesildi")
+        say("Red boss kesildi, sıradakine geçiliyor")
+        potCheckNow()
+        return true
+    }
+
+    /** Haritayı açıp canlı red boss ikonlarını gösterir; dokunarak seçilenler bu harita/wire için kaydedilir. */
+    private fun redMark() {
+        closeMapIfOpen()
+        val info = readMapWireRetry()
+        val old = redMapName()
+        if (old.isNotEmpty() && key(old) != key(info.first) && redSnapshot().isNotEmpty()) {
+            synchronized(lock) { reds.clear() }
+            saveReds()
+            toast("Red boss haritası değişti (" + old + " -> " + info.first + "), eski noktalar silindi")
+        }
+        prefs().edit().putString("redMap", info.first).apply()
+        val mb = ensureMap()
+        val skulls = scanSkulls(mb) { isRedIcon(it) }
+        say("Red boss işaretleme: " + info.first + " · " + skulls.size + " ikon bulundu")
+        ui { showRedMark(info.first, skulls) }
+    }
+
+    private class RedMarkView(
+        ctx: Context,
+        val skulls: List<PointF>,
+        val existing: List<PointF>,
+        val picked: MutableList<PointF>
+    ) : View(ctx) {
+        private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun onDraw(c: Canvas) {
+            p.strokeWidth = 5f
+            p.textSize = 30f
+            for (e in existing) {
+                p.style = Paint.Style.STROKE
+                p.color = Color.CYAN
+                c.drawCircle(e.x, e.y, 34f, p)
+            }
+            for ((i, k) in skulls.withIndex()) {
+                p.style = Paint.Style.STROKE
+                p.color = Color.RED
+                c.drawCircle(k.x, k.y, 30f, p)
+                p.style = Paint.Style.FILL
+                c.drawText((i + 1).toString(), k.x + 24f, k.y - 24f, p)
+            }
+            for (k in picked) {
+                p.style = Paint.Style.FILL
+                p.color = 0x9900FF00.toInt()
+                c.drawCircle(k.x, k.y, 26f, p)
+            }
+        }
+    }
+
+    private fun showRedMark(map: String, skulls: List<PointF>) {
+        removeExtra()
+        val picked = ArrayList<PointF>()
+        val existing = redSnapshot().map { PointF(it.px * screenW, it.py * screenH) }
+        val view = RedMarkView(this, skulls, existing, picked)
+        val fl = FrameLayout(this)
+        fl.setBackgroundColor(0x22000000)
+        fl.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.background = rounded(0xEE161920.toInt(), 12)
+        bar.setPadding(dp(8), dp(6), dp(8), dp(6))
+        val info = TextView(this)
+        info.setTextColor(Color.WHITE)
+        info.textSize = 12f
+        fun refreshInfo() {
+            info.text = map + "\nSeçili: " + picked.size + " (kırmızı halka: bulunan, camgöbeği: kayıtlı)"
+        }
+        refreshInfo()
+        bar.addView(info)
+        bar.addView(mkBtn("Hepsini seç") {
+            picked.clear()
+            picked.addAll(skulls)
+            view.invalidate()
+            refreshInfo()
+        }, LinearLayout.LayoutParams(dp(110), dp(40)))
+        bar.addView(mkBtn("Kaydet", OK, 0xFF04200F.toInt()) {
+            var added = 0
+            synchronized(lock) {
+                for (k in picked) {
+                    val px = k.x / screenW
+                    val py = k.y / screenH
+                    val dup = reds.any { dist(PointF(it.px * screenW, it.py * screenH), k) < 40f }
+                    if (dup) continue
+                    var idx = 1
+                    while (reds.any { it.idx == idx }) idx++
+                    reds.add(Red(System.currentTimeMillis() + added, idx, px, py))
+                    added++
+                }
+            }
+            saveReds()
+            removeExtra()
+            toast(added.toString() + " red boss kaydedildi")
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(90), dp(40)))
+        bar.addView(mkBtn("İptal") {
+            removeExtra()
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(80), dp(40)))
+        fl.addView(
+            bar,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            )
+        )
+        view.setOnTouchListener { _, ev ->
+            if (ev.action == MotionEvent.ACTION_UP) {
+                val t = PointF(ev.rawX, ev.rawY)
+                var near: PointF? = null
+                var nd = 55f
+                for (k in skulls) {
+                    val d = dist(k, t)
+                    if (d < nd) {
+                        nd = d
+                        near = k
+                    }
+                }
+                val spot = near ?: t
+                val already = picked.firstOrNull { dist(it, spot) < 30f }
+                if (already != null) picked.remove(already) else picked.add(spot)
+                view.invalidate()
+                refreshInfo()
+            }
+            true
+        }
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        wm.addView(fl, lp)
+        extra = fl
+    }
+
+    /** Kayıtlı red boss noktalarının listesi: dokununca gidip keser, uzun basılı ✕ siler. */
+    private fun toggleRedWin() {
+        if (bossWin != null) {
+            val was = redWinOpen
+            closeBossWin()
+            if (was) return
+        }
+        refreshScreen()
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.background = rounded(PANEL_BG, 16)
+        outer.setPadding(dp(14), dp(12), dp(14), dp(14))
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        val t = TextView(this)
+        t.text = "Red boss noktalar (" + redSnapshot().size + ")"
+        t.textSize = 16f
+        t.setTextColor(Color.WHITE)
+        t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        head.addView(t, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(mkBtn("Kapat ✕") { closeBossWin() }, LinearLayout.LayoutParams(dp(90), dp(36)))
+        outer.addView(head)
+        val hint = TextView(this)
+        hint.text = "İşaretli nokta varsa otomasyon yalnızca onlara gider; hiç yoksa haritadaki tüm canlı red boss'lara gider (en yakından). Satıra dokun: sadece oraya git."
+        hint.textSize = 11f
+        hint.setTextColor(TEXT_DIM)
+        hint.setPadding(0, dp(4), 0, dp(4))
+        outer.addView(hint)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        val sv = ScrollView(this)
+        sv.addView(col)
+        outer.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        val list = redSnapshot().sortedBy { it.idx }
+        if (list.isEmpty()) {
+            val e0 = TextView(this)
+            e0.text = "Henüz red boss noktası yok."
+            e0.setTextColor(TEXT_DIM)
+            col.addView(e0)
+        }
+        for (g in list) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(CARD_BG, 10)
+            row.setPadding(dp(12), dp(8), dp(8), dp(8))
+            val left = LinearLayout(this)
+            left.orientation = LinearLayout.VERTICAL
+            val n1 = TextView(this)
+            n1.text = redTitle(g)
+            n1.textSize = 15f
+            n1.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            n1.setTextColor(Color.WHITE)
+            left.addView(n1)
+            val n2 = TextView(this)
+            n2.text = redMapName() + " · Red boss " + g.idx
+            n2.textSize = 10f
+            n2.setTextColor(TEXT_DIM)
+            left.addView(n2)
+            row.addView(left, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val del = TextView(this)
+            del.text = "✕"
+            del.textSize = 16f
+            del.setTextColor(TEXT_DIM)
+            del.setPadding(dp(14), dp(6), dp(6), dp(6))
+            del.setOnLongClickListener {
+                synchronized(lock) { reds.remove(g) }
+                saveReds()
+                closeBossWin()
+                toggleRedWin()
+                true
+            }
+            row.addView(del)
+            row.setOnClickListener {
+                if (autoRunning) {
+                    say("Otomasyon açık. Önce otomasyonu durdur.")
+                } else {
+                    closeBossWin()
+                    runManual { redCycle(g) }
+                }
+            }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(6)
+            col.addView(row, lp)
+        }
+        val w = minOf(dp(440), (screenW * 0.6f).toInt())
+        val lp = overlayParams(w)
+        lp.height = (screenH * 0.82f).toInt()
+        lp.x = (screenW - w) / 2
+        lp.y = (screenH - lp.height) / 2
+        wm.addView(outer, lp)
+        bossWin = outer
+        redWinOpen = true
+    }
+
+
     // ------------------------------------------------------------------ zaman kayıtları (günlük)
 
     private fun stampList(): MutableList<Long> =
@@ -3761,7 +4298,7 @@ class TimerService : AccessibilityService() {
         val now = System.currentTimeMillis()
         val sb = StringBuilder()
         sb.append(if (autoRunning) "Otomasyon AÇIK (" + ((now - startedAt) / 60000) + " dk)" else "Otomasyon kapalı")
-        sb.append("\nBoss " + kills + " · Golden " + goldKills + " · Ölüm " + deaths + (if (farming) " · farmda" else ""))
+        sb.append("\nBoss " + kills + " · Golden " + goldKills + " · Red " + redKills + " · Ölüm " + deaths + (if (farming) " · farmda" else ""))
         sb.append("\nŞu an: " + lastSay.replace("\n", " · "))
         val nx = snapshot().sortedBy { it.endMs }.take(5)
         if (nx.isNotEmpty()) {

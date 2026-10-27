@@ -64,6 +64,11 @@ class MainActivity : Activity() {
         Field("recycleEvery", "Recycle aralığı", "Otomasyon açıkken bu kadar dakikada bir Recycle yapılır (dk). Pot kapalı olsa da çalışır", "20")
     )
 
+    private val redFields = listOf(
+        Field("redRadius", "Red boss Random yarıçapı", "Red boss noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
+        Field("redRetry", "Red boss yeniden bakma", "Haritada hiç canlı red boss görünmezse bu kadar saniye sonra tekrar bakılır (sn)", "15")
+    )
+
     private val goldFields = listOf(
         Field("goldWire", "Golden wire", "Golden kesilecek wire (farm ve buff gibi önce bu wire'a geçilir)", "3"),
         Field("goldRadius", "Golden Random yarıçapı", "Golden noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
@@ -83,6 +88,8 @@ class MainActivity : Activity() {
     private lateinit var farmOn: Switch
     private lateinit var goldOn: Switch
     private lateinit var goldRandomOn: Switch
+    private lateinit var redOn: Switch
+    private lateinit var redRandomOn: Switch
     private lateinit var impOn: Switch
     private lateinit var angelOn: Switch
     private lateinit var reviveOn: Switch
@@ -198,6 +205,11 @@ class MainActivity : Activity() {
         goldRandomOn = sw(gold, "Golden'a giderken Random kullan", "cfg_goldRandomOn", false)
         for (f in goldFields) addField(gold, f)
 
+        val red = card(col, "Red bosslar (VIP Domain; süre kaydedilmez)")
+        redOn = sw(red, "Boss yokken işaretli red bossları kes (Oto sekmesindeki düğmeyle de açılır)", "cfg_redOn", false)
+        redRandomOn = sw(red, "Red boss'a giderken Random kullan", "cfg_redRandomOn", false)
+        for (f in redFields) addField(red, f)
+
         val buff = card(col, "Buff")
         buffOn = sw(buff, "Buff alma açık", "cfg_buffOn", false)
         for (f in buffFields) addField(buff, f)
@@ -253,7 +265,7 @@ class MainActivity : Activity() {
 
     private fun writeSettings() {
             val e = prefs().edit()
-            val all = autoFields + farmFields + moveFields + goldFields + buffFields + shopFields
+            val all = autoFields + farmFields + moveFields + goldFields + redFields + buffFields + shopFields
             for ((k, et) in inputs) {
                 val f = all.first { it.key == k }
                 val raw = et.text.toString().trim()
@@ -263,6 +275,8 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_farmOn", farmOn.isChecked)
             e.putBoolean("cfg_goldOn", goldOn.isChecked)
             e.putBoolean("cfg_goldRandomOn", goldRandomOn.isChecked)
+            e.putBoolean("cfg_redOn", redOn.isChecked)
+            e.putBoolean("cfg_redRandomOn", redRandomOn.isChecked)
             e.putBoolean("cfg_impOn", impOn.isChecked)
             e.putBoolean("cfg_angelOn", angelOn.isChecked)
             e.putBoolean("cfg_reviveOn", reviveOn.isChecked)
