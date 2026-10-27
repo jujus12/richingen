@@ -17,6 +17,7 @@ import android.graphics.PointF
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Display
 import android.view.Gravity
 import android.view.MotionEvent
@@ -314,6 +315,7 @@ class TimerService : AccessibilityService() {
         pollRun = false
         pollThread?.interrupt()
         closeBossWin()
+        closeStopwatch()
         cancel = true
         autoRunning = false
         worker?.interrupt()
@@ -1078,6 +1080,7 @@ class TimerService : AccessibilityService() {
             try {
                 applyThrough(panel, panelLp, through)
                 applyThrough(handle, handleLp, through)
+                applyThrough(swWin, swLp, through)
             } catch (e: Exception) {
             }
             latch.countDown()
@@ -2251,7 +2254,8 @@ class TimerService : AccessibilityService() {
         val r3 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "Golden işaretle" to { runManual { goldMark() } },
-                "Golden listesi" to { toggleGoldWin() }
+                "Golden listesi" to { toggleGoldWin() },
+                "Kronometre" to { toggleStopwatch() }
             ),
             dp(36)
         )
@@ -3258,6 +3262,136 @@ class TimerService : AccessibilityService() {
         wm.addView(outer, lp)
         bossWin = outer
         goldWinOpen = true
+    }
+
+
+    // ------------------------------------------------------------------ kronometre (ekranda sürüklenebilir)
+
+    private var swWin: LinearLayout? = null
+    private var swLp: WindowManager.LayoutParams? = null
+    private var swText: TextView? = null
+    private var swStartBtn: Button? = null
+    private var swRunning = false
+    private var swStart = 0L
+    private var swAcc = 0L
+    private val swTick = object : Runnable {
+        override fun run() {
+            updateSw()
+            if (swWin != null) main.postDelayed(this, 100)
+        }
+    }
+
+    private fun swElapsed(): Long = swAcc + (if (swRunning) SystemClock.elapsedRealtime() - swStart else 0L)
+
+    private fun fmtSw(ms: Long): String {
+        val t = ms / 100
+        val tenth = t % 10
+        val sec = (t / 10) % 60
+        val min = (t / 600) % 60
+        val h = t / 36000
+        return if (h > 0) String.format("%d:%02d:%02d.%d", h, min, sec, tenth) else String.format("%02d:%02d.%d", min, sec, tenth)
+    }
+
+    private fun updateSw() {
+        swText?.text = fmtSw(swElapsed())
+        swStartBtn?.text = if (swRunning) "Duraklat" else (if (swAcc > 0) "Devam" else "Başlat")
+    }
+
+    private fun closeStopwatch() {
+        main.removeCallbacks(swTick)
+        val w = swWin ?: return
+        try {
+            wm.removeView(w)
+        } catch (e: Exception) {
+        }
+        swWin = null
+        swText = null
+        swStartBtn = null
+    }
+
+    /** Ekranda her yere sürüklenebilir küçük kronometre. Kapatınca süre durmaz, yeniden açınca devam eder. */
+    private fun toggleStopwatch() {
+        if (swWin != null) {
+            closeStopwatch()
+            return
+        }
+        refreshScreen()
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.background = rounded(0xEE161920.toInt(), 14)
+        box.setPadding(dp(10), dp(6), dp(10), dp(8))
+        val tv = TextView(this)
+        tv.textSize = 24f
+        tv.typeface = android.graphics.Typeface.MONOSPACE
+        tv.setTextColor(Color.WHITE)
+        tv.gravity = Gravity.CENTER
+        swText = tv
+        box.addView(tv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        val sb = mkBtn("Başlat", OK, 0xFF04200F.toInt()) {
+            if (swRunning) {
+                swAcc += SystemClock.elapsedRealtime() - swStart
+                swRunning = false
+            } else {
+                swStart = SystemClock.elapsedRealtime()
+                swRunning = true
+            }
+            updateSw()
+        }
+        swStartBtn = sb
+        row.addView(sb, LinearLayout.LayoutParams(0, dp(34), 1.3f))
+        val rb = mkBtn("Sıfırla") {
+            swAcc = 0L
+            swStart = SystemClock.elapsedRealtime()
+            updateSw()
+        }
+        val rbl = LinearLayout.LayoutParams(0, dp(34), 1f)
+        rbl.leftMargin = dp(4)
+        row.addView(rb, rbl)
+        val cb = mkBtn("✕") { closeStopwatch() }
+        val cbl = LinearLayout.LayoutParams(dp(34), dp(34))
+        cbl.leftMargin = dp(4)
+        row.addView(cb, cbl)
+        val rowLp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        rowLp.topMargin = dp(4)
+        box.addView(row, rowLp)
+
+        val lp = overlayParams(dp(190))
+        lp.x = prefs().getInt("swx", (screenW * 0.35f).toInt()).coerceIn(0, maxOf(0, screenW - dp(190)))
+        lp.y = prefs().getInt("swy", (screenH * 0.25f).toInt()).coerceIn(0, maxOf(0, screenH - dp(100)))
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        // sürükleme: süre yazısından ya da kenar boşluklarından tutulur
+        val drag = View.OnTouchListener { _, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX
+                    downY = ev.rawY
+                    startX = lp.x
+                    startY = lp.y
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    lp.x = (startX + (ev.rawX - downX)).toInt().coerceIn(0, maxOf(0, screenW - box.width))
+                    lp.y = (startY + (ev.rawY - downY)).toInt().coerceIn(0, maxOf(0, screenH - box.height))
+                    try {
+                        wm.updateViewLayout(box, lp)
+                    } catch (e: Exception) {
+                    }
+                }
+                MotionEvent.ACTION_UP -> prefs().edit().putInt("swx", lp.x).putInt("swy", lp.y).apply()
+            }
+            true
+        }
+        tv.setOnTouchListener(drag)
+        box.setOnTouchListener(drag)
+        wm.addView(box, lp)
+        swWin = box
+        swLp = lp
+        updateSw()
+        main.postDelayed(swTick, 100)
     }
 
     // ------------------------------------------------------------------ telefon bildirimi ve uzaktan sorgu (ntfy)
