@@ -214,6 +214,8 @@ class TimerService : AccessibilityService() {
     private var listCol: LinearLayout? = null
     private var radiusView: TextView? = null
     private var gapView: TextView? = null
+    private var stopWin: TextView? = null
+    private var stopLp: WindowManager.LayoutParams? = null
     private var toolsBox: LinearLayout? = null
     private var panelLp: WindowManager.LayoutParams? = null
     private var handleLp: WindowManager.LayoutParams? = null
@@ -324,6 +326,7 @@ class TimerService : AccessibilityService() {
             removeExtra()
             panel?.let { wm.removeView(it) }
             handle?.let { wm.removeView(it) }
+            stopWin?.let { wm.removeView(it) }
             menu?.let { wm.removeView(it) }
         } catch (e: Exception) {
         }
@@ -1074,13 +1077,28 @@ class TimerService : AccessibilityService() {
     // ------------------------------------------------------------------ dokunma
 
     /** Dokunma sırasında panelin ve tutamacın dokunuşu yutmaması için pencereleri geçirgen yapar. */
-    private fun setThrough(through: Boolean) {
+    private val throughOn = ArrayList<Pair<View, WindowManager.LayoutParams>>()
+
+    /** Dokunuş noktasını örten pencereleri (panel, tutamaç, kronometre, Durdur) geçici olarak dokunuşa kapatır; diğerlerine dokunmaz. */
+    private fun setThrough(through: Boolean, x: Float = -1f, y: Float = -1f) {
         val latch = CountDownLatch(1)
         ui {
             try {
-                applyThrough(panel, panelLp, through)
-                applyThrough(handle, handleLp, through)
-                applyThrough(swWin, swLp, through)
+                if (through) {
+                    val m = dp(24)
+                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(stopWin, stopLp))
+                    for ((v, lp) in cands) {
+                        if (v == null || lp == null || v.visibility != View.VISIBLE) continue
+                        val w = if (v.width > 0) v.width else lp.width
+                        val h = if (v.height > 0) v.height else dp(60)
+                        if (x < lp.x - m || x > lp.x + w + m || y < lp.y - m || y > lp.y + h + m) continue
+                        applyThrough(v, lp, true)
+                        throughOn.add(Pair(v, lp))
+                    }
+                } else {
+                    for ((v, lp) in throughOn) applyThrough(v, lp, false)
+                    throughOn.clear()
+                }
             } catch (e: Exception) {
             }
             latch.countDown()
@@ -1096,7 +1114,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun tapPx(x: Float, y: Float): Boolean {
-        setThrough(true)
+        setThrough(true, x, y)
         try {
             Thread.sleep(40)
             if (shizukuReady() && shell(arrayOf("input", "tap", x.toInt().toString(), y.toInt().toString()))) {
@@ -2078,6 +2096,7 @@ class TimerService : AccessibilityService() {
 
     private fun applyPanel() {
         panel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
+        stopWin?.visibility = if (autoRunning) View.VISIBLE else View.GONE
         val mode = if (autoRunning) "▶" else if (busy) "⚙" else "⏱"
         handle?.text = (if (panelOpen) "▸" else "◂") + "\n" + mode
         placeBar()
@@ -2100,6 +2119,18 @@ class TimerService : AccessibilityService() {
             hl.y = hy
             try {
                 wm.updateViewLayout(h, hl)
+            } catch (e: Exception) {
+            }
+        }
+        val sl = stopLp
+        val sv2 = stopWin
+        if (sl != null && sv2 != null) {
+            val sw2 = dp(82)
+            val sh2 = dp(34)
+            sl.x = (hx + hw - sw2).coerceIn(0, maxOf(0, screenW - sw2))
+            sl.y = if (hy + hh + dp(4) + sh2 <= screenH) hy + hh + dp(4) else maxOf(0, hy - sh2 - dp(4))
+            try {
+                wm.updateViewLayout(sv2, sl)
             } catch (e: Exception) {
             }
         }
@@ -2442,6 +2473,22 @@ class TimerService : AccessibilityService() {
         wm.addView(h, hl)
         handle = h
         handleLp = hl
+
+        // Otomasyon sürerken tutamacın yanında hep dokunulabilir Durdur düğmesi
+        val sw = TextView(this)
+        sw.text = "■ Durdur"
+        sw.textSize = 12f
+        sw.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        sw.gravity = Gravity.CENTER
+        sw.setTextColor(Color.WHITE)
+        sw.background = rounded(BAD, 12)
+        sw.setPadding(dp(8), dp(6), dp(8), dp(6))
+        sw.setOnClickListener { stopJob() }
+        sw.visibility = View.GONE
+        val slp2 = overlayParams(dp(82))
+        wm.addView(sw, slp2)
+        stopWin = sw
+        stopLp = slp2
         updateUi()
     }
 
