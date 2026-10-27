@@ -24,7 +24,22 @@ jobs:
           gradle-version: 8.9
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log
+
+      - name: Save error log on failure
+        if: failure()
+        run: |
+          grep -E "^e: |error:|FAILED|What went wrong" -A3 build.log | head -80 > errors.txt || true
+          git config user.name ci && git config user.email ci@example.com
+          git checkout --orphan buildlog
+          git rm -rf . -q || true
+          cp errors.txt ERRORS.txt
+          git add ERRORS.txt
+          git commit -qm "build errors"
+          git push -f origin buildlog
 
       - name: Rename APK
         run: cp build/outputs/apk/debug/*.apk richingen.apk
