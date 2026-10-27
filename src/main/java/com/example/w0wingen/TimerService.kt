@@ -260,6 +260,7 @@ class TimerService : AccessibilityService() {
     private val golds = ArrayList<Gold>()
     private var goldKills = 0
     private var goldWinOpen = false
+    private var stampWinOpen = false
     private var goldRadiusView: TextView? = null
     @Volatile private var lastRatio = 0f
     private val deathCnt = HashMap<Long, Int>()
@@ -2291,6 +2292,14 @@ class TimerService : AccessibilityService() {
             dp(36)
         )
         tb.addView(r3, rlp)
+        val r4 = btnRow(
+            listOf<Pair<String, () -> Unit>>(
+                "⏱ Zaman kaydet" to { addStamp() },
+                "Kayıt listesi" to { toggleStampWin() }
+            ),
+            dp(36)
+        )
+        tb.addView(r4, rlp)
         val rr = LinearLayout(this)
         rr.orientation = LinearLayout.HORIZONTAL
         rr.gravity = Gravity.CENTER_VERTICAL
@@ -2495,8 +2504,9 @@ class TimerService : AccessibilityService() {
     private fun rebuildList() {
         if (bossWin != null) {
             val gw = goldWinOpen
+            val sw = stampWinOpen
             closeBossWin()
-            if (gw) toggleGoldWin() else toggleBossWin()
+            if (sw) toggleStampWin() else if (gw) toggleGoldWin() else toggleBossWin()
         }
         val l = listCol ?: return
         l.removeAllViews()
@@ -2607,6 +2617,7 @@ class TimerService : AccessibilityService() {
         }
         bossWin = null
         goldWinOpen = false
+        stampWinOpen = false
         winTimers.clear()
     }
 
@@ -3311,6 +3322,112 @@ class TimerService : AccessibilityService() {
         goldWinOpen = true
     }
 
+
+    // ------------------------------------------------------------------ zaman kayıtları (günlük)
+
+    private fun stampList(): MutableList<Long> =
+        prefs().getString("stamps", "")!!.split(",").mapNotNull { it.toLongOrNull() }.toMutableList()
+
+    private fun saveStamps(l: List<Long>) {
+        prefs().edit().putString("stamps", l.joinToString(",")).apply()
+    }
+
+    private fun fmtStamp(t: Long): String =
+        java.text.SimpleDateFormat("dd.MM  HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(t))
+
+    /** Her basışta güncel saati kaydeder. */
+    private fun addStamp() {
+        val now = System.currentTimeMillis()
+        val l = stampList()
+        l.add(now)
+        saveStamps(l)
+        toast("Kaydedildi #" + l.size + "  " + fmtStamp(now))
+        if (stampWinOpen) {
+            closeBossWin()
+            toggleStampWin()
+        }
+    }
+
+    private fun toggleStampWin() {
+        if (bossWin != null) {
+            val was = stampWinOpen
+            closeBossWin()
+            if (was) return
+        }
+        refreshScreen()
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.background = rounded(PANEL_BG, 16)
+        outer.setPadding(dp(14), dp(12), dp(14), dp(14))
+        val list = stampList()
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        val t = TextView(this)
+        t.text = "Zaman kayıtları (" + list.size + ")"
+        t.textSize = 16f
+        t.setTextColor(Color.WHITE)
+        t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        head.addView(t, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(mkBtn("Sıfırla", BAD) {
+            saveStamps(emptyList())
+            closeBossWin()
+            toggleStampWin()
+        }, LinearLayout.LayoutParams(dp(90), dp(36)))
+        val sp = View(this)
+        head.addView(sp, LinearLayout.LayoutParams(dp(6), 1))
+        head.addView(mkBtn("Kapat ✕") { closeBossWin() }, LinearLayout.LayoutParams(dp(90), dp(36)))
+        outer.addView(head)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        val sv = ScrollView(this)
+        sv.addView(col)
+        outer.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        if (list.isEmpty()) {
+            val e0 = TextView(this)
+            e0.text = "Henüz kayıt yok. Araçlar sekmesinde \"Zaman kaydet\"e bas."
+            e0.setTextColor(TEXT_DIM)
+            e0.setPadding(0, dp(8), 0, 0)
+            col.addView(e0)
+        }
+        for (i in list.indices.reversed()) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(CARD_BG, 10)
+            row.setPadding(dp(12), dp(8), dp(12), dp(8))
+            val n = TextView(this)
+            n.text = "#" + (i + 1)
+            n.textSize = 12f
+            n.setTextColor(TEXT_DIM)
+            row.addView(n, LinearLayout.LayoutParams(dp(44), LinearLayout.LayoutParams.WRAP_CONTENT))
+            val tt = TextView(this)
+            tt.text = fmtStamp(list[i])
+            tt.textSize = 15f
+            tt.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            tt.setTextColor(Color.WHITE)
+            row.addView(tt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            if (i > 0) {
+                val d = TextView(this)
+                val sec = (list[i] - list[i - 1]) / 1000
+                d.text = "+" + (sec / 60) + "dk " + (sec % 60) + "sn"
+                d.textSize = 11f
+                d.setTextColor(TEXT_DIM)
+                row.addView(d)
+            }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(6)
+            col.addView(row, lp)
+        }
+        val w = minOf(dp(440), (screenW * 0.6f).toInt())
+        val lp = overlayParams(w)
+        lp.height = (screenH * 0.82f).toInt()
+        lp.x = (screenW - w) / 2
+        lp.y = (screenH - lp.height) / 2
+        wm.addView(outer, lp)
+        bossWin = outer
+        stampWinOpen = true
+    }
 
     // ------------------------------------------------------------------ kronometre (ekranda sürüklenebilir)
 
