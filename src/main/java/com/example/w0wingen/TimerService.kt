@@ -199,6 +199,50 @@ class TimerService : AccessibilityService() {
             Triple("goldOn", "Golden", false),
             Triple("goldRandomOn", "G·Rnd", false)
         )
+
+        // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
+        private fun profKey(k: String) = k.startsWith("cfg_") && k != "cfg_ntfy" && k != "cfg_maps"
+
+        fun profileNames(p: android.content.SharedPreferences): List<String> =
+            p.getString("profile_names", "")!!.split("\n").filter { it.isNotBlank() }
+
+        fun saveProfile(p: android.content.SharedPreferences, rawName: String): String {
+            val name = rawName.replace("\n", " ").trim().take(20)
+            if (name.isEmpty()) return ""
+            val o = org.json.JSONObject()
+            for ((k, v) in p.all) {
+                if (!profKey(k)) continue
+                if (v is Boolean) o.put(k, v) else if (v is String) o.put(k, v)
+            }
+            for (t in TOGGLES) if (!o.has("cfg_" + t.first)) o.put("cfg_" + t.first, t.third)
+            val names = profileNames(p).toMutableList()
+            if (!names.contains(name)) names.add(name)
+            p.edit().putString("profile_" + name, o.toString()).putString("profile_names", names.joinToString("\n"))
+                .putString("profile_active", name).apply()
+            return name
+        }
+
+        fun applyProfile(p: android.content.SharedPreferences, name: String): Boolean {
+            val js = p.getString("profile_" + name, null) ?: return false
+            val o = org.json.JSONObject(js)
+            val e = p.edit()
+            for (k in p.all.keys) if (profKey(k) && !o.has(k)) e.remove(k)
+            val it = o.keys()
+            while (it.hasNext()) {
+                val k = it.next()
+                val v = o.get(k)
+                if (v is Boolean) e.putBoolean(k, v) else e.putString(k, v.toString())
+            }
+            e.putString("profile_active", name).apply()
+            return true
+        }
+
+        fun deleteProfile(p: android.content.SharedPreferences, name: String) {
+            val names = profileNames(p).filter { it != name }
+            val e = p.edit().remove("profile_" + name).putString("profile_names", names.joinToString("\n"))
+            if (p.getString("profile_active", "") == name) e.remove("profile_active")
+            e.apply()
+        }
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -308,6 +352,7 @@ class TimerService : AccessibilityService() {
         rebuildList()
         main.postDelayed(ticker, 1000)
         startPoller()
+        startWatchdog()
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
@@ -316,6 +361,7 @@ class TimerService : AccessibilityService() {
 
     override fun onDestroy() {
         pollRun = false
+        dogRun = false
         pollThread?.interrupt()
         closeBossWin()
         closeStopwatch()
@@ -1115,6 +1161,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun tapPx(x: Float, y: Float): Boolean {
+        lastBeat = System.currentTimeMillis()
         setThrough(true, x, y)
         try {
             Thread.sleep(40)
@@ -1697,6 +1744,7 @@ class TimerService : AccessibilityService() {
             return
         }
         autoRunning = true
+        lastBeat = System.currentTimeMillis()
         job { autoLoop() }
     }
 
@@ -1793,8 +1841,74 @@ class TimerService : AccessibilityService() {
 
     @Volatile private var lastWatch = 0L
 
+    // ------------------------------------------------------------------ takılma bekçisi
+
+    /** Son hareket: bir dokunuş ya da bekleme/farm durumuna oturmuş döngü. */
+    @Volatile private var lastBeat = 0L
+    @Volatile private var dogRun = false
+    private val rescues = ArrayList<Long>()
+
+    private fun startWatchdog() {
+        dogRun = true
+        Thread {
+            while (dogRun) {
+                try {
+                    Thread.sleep(30000)
+                } catch (e: InterruptedException) {
+                    return@Thread
+                }
+                try {
+                    val lim = cfgI("stuckMin", 10) * 60000L
+                    if (lim <= 0L || !autoRunning || !busy) continue
+                    val idle = System.currentTimeMillis() - lastBeat
+                    if (idle >= lim) rescue(idle / 60000L)
+                } catch (e: Exception) {
+                }
+            }
+        }.start()
+    }
+
+    private fun rescue(mins: Long) {
+        val now = System.currentTimeMillis()
+        rescues.removeAll { now - it > 3600000L }
+        if (rescues.size >= 3) {
+            ev("Takıldı ve 1 saatte 3 kez kurtarılamadı, otomasyon durdu", true, 5)
+            say("Takıldı, kurtarılamadı. Otomasyon durduruldu.")
+            cancel = true
+            autoRunning = false
+            worker?.interrupt()
+            return
+        }
+        rescues.add(now)
+        ev("Takıldı: " + mins + " dk hiçbir şey yapmadı, kurtarma deneniyor (" + lastSay.replace("\n", " · ") + ")", true, 5)
+        cancel = true
+        worker?.interrupt()
+        var w = 0
+        while (busy && w < 150) {
+            Thread.sleep(100)
+            w++
+        }
+        if (busy) {
+            ev("Kurtarılamadı: işlem yanıt vermiyor. Uygulamayı kontrol et.", true, 5)
+            autoRunning = false
+            return
+        }
+        cancel = false
+        lastBeat = System.currentTimeMillis()
+        autoRunning = true
+        try {
+            closeMapIfOpen()
+        } catch (e: Exception) {
+        }
+        if (!autoRunning) return
+        autoRunning = false
+        startAuto()
+        ev("Kurtarma: otomasyon yeniden başlatıldı", true, 4)
+    }
+
     private fun idleTick() {
         val now = System.currentTimeMillis()
+        lastBeat = now
         // Farmda/bekleyişte ölüm ve oyundan atılma ancak ekran görüntüsüyle anlaşılır: birkaç saniyede bir bak
         if (now - lastWatch >= 4000L) {
             lastWatch = now
@@ -2086,6 +2200,37 @@ class TimerService : AccessibilityService() {
         radiusView?.text = v.toString()
     }
 
+    private var profileBtn: Button? = null
+
+    private fun updateProfileBtn() {
+        val names = profileNames(prefs())
+        val a = prefs().getString("profile_active", "") ?: ""
+        profileBtn?.text = if (names.isEmpty()) "Profil yok (ayar ekranından kaydet)" else "Profil: " + (if (a.isEmpty()) "-" else a) + "  ▸  (uzun bas: güncelle)"
+    }
+
+    /** Sıradaki profile geçer; sayısal alanlar ve düğmeler yeni değerleri gösterir. */
+    private fun cycleProfile() {
+        if (autoRunning || busy) {
+            say("Otomasyon açıkken profil değişmez. Önce durdur.")
+            return
+        }
+        val names = profileNames(prefs())
+        if (names.isEmpty()) {
+            toast("Henüz profil yok. Ayar ekranından kaydet.")
+            return
+        }
+        val a = prefs().getString("profile_active", "") ?: ""
+        val next = names[(names.indexOf(a) + 1) % names.size]
+        applyProfile(prefs(), next)
+        updateToggles()
+        updateProfileBtn()
+        radiusView?.text = cfgI("radius", 200).toString()
+        goldRadiusView?.text = cfgI("goldRadius", 150).toString()
+        gapView?.text = String.format("%.2f", gap() / 1000f)
+        say("Profil yüklendi: " + next)
+        toast("Profil: " + next)
+    }
+
     private fun updateToggles() {
         for (t in TOGGLES) {
             val btn = toggleBtns[t.first] ?: continue
@@ -2256,6 +2401,23 @@ class TimerService : AccessibilityService() {
                 tabAuto.addView(row, rl)
             }
         }
+        val pb = mkBtn("") { cycleProfile() }
+        pb.textSize = 12f
+        pb.setOnLongClickListener {
+            val a = prefs().getString("profile_active", "") ?: ""
+            if (a.isNotEmpty()) {
+                saveProfile(prefs(), a)
+                toast("Profil güncellendi: " + a)
+            } else {
+                toast("Önce uygulamadaki ayar ekranından bir profil kaydet")
+            }
+            true
+        }
+        profileBtn = pb
+        val pbl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38))
+        pbl.topMargin = dp(6)
+        tabAuto.addView(pb, pbl)
+        updateProfileBtn()
         togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "randomOn"))
         togGroup("BAKIM", listOf("potOn", "recycleOn", "buffOn"))
         togGroup("SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))

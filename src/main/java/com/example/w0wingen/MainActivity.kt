@@ -28,7 +28,8 @@ class MainActivity : Activity() {
         Field("leadSec", "Bossa gitme payı", "Süresi bu kadar saniye kalınca (ya da geçmişse) bossa gidilir", "20"),
         Field("fightTimeout", "Savaş zaman aşımı", "Bir boss için en fazla bekleme (sn)", "300"),
         Field("deathLimit", "Ölüm sınırı", "Aynı bossta bu kadar ölünce o boss atlanıp farma dönülür", "3"),
-        Field("deathBlockMin", "Atlama süresi", "Ölüm sınırına ulaşan boss bu kadar dakika atlanır (dk)", "15")
+        Field("deathBlockMin", "Atlama süresi", "Ölüm sınırına ulaşan boss bu kadar dakika atlanır (dk)", "15"),
+        Field("stuckMin", "Takılma bekçisi", "Bot bu kadar dakika hiçbir şey yapmazsa telefona bildirim gider ve kurtarma denenir (0 = kapalı)", "10")
     )
 
     private val farmFields = listOf(
@@ -209,6 +210,48 @@ class MainActivity : Activity() {
 
         val save = button("Kaydet", true)
         save.setOnClickListener {
+            writeSettings()
+            Toast.makeText(this, "Kaydedildi (oyundaki 'Ayar' menüsünü yeniden aç)", Toast.LENGTH_SHORT).show()
+        }
+        col.addView(save, lp(dp(6)))
+
+        val profCard = card(col, "Profiller")
+        val ph = TextView(this)
+        ph.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Oto sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
+        ph.textSize = 11f
+        ph.setTextColor(DIM)
+        profCard.addView(ph)
+        profName = EditText(this)
+        profName.hint = "Profil adı (örn. Boss gecesi)"
+        profName.setTextColor(Color.WHITE)
+        profName.setHintTextColor(DIM)
+        profName.setSingleLine(true)
+        profCard.addView(profName, lp(dp(8)))
+        val ps = button("Mevcut ayarları profil olarak kaydet", true)
+        ps.setOnClickListener {
+            writeSettings()
+            val n = TimerService.saveProfile(prefs(), profName.text.toString())
+            if (n.isEmpty()) {
+                Toast.makeText(this, "Önce bir ad yaz", Toast.LENGTH_SHORT).show()
+            } else {
+                profName.setText("")
+                Toast.makeText(this, "Profil kaydedildi: " + n, Toast.LENGTH_SHORT).show()
+                renderProfiles()
+            }
+        }
+        profCard.addView(ps, lp(dp(8)))
+        profBox = LinearLayout(this)
+        profBox.orientation = LinearLayout.VERTICAL
+        profCard.addView(profBox, lp(dp(8)))
+        renderProfiles()
+
+        val sv = ScrollView(this)
+        sv.setBackgroundColor(BG)
+        sv.addView(col)
+        setContentView(sv)
+    }
+
+    private fun writeSettings() {
             val e = prefs().edit()
             val all = autoFields + farmFields + moveFields + goldFields + buffFields + shopFields
             for ((k, et) in inputs) {
@@ -230,14 +273,48 @@ class MainActivity : Activity() {
             val m = mapsEdit.text.toString().trim()
             e.putString("cfg_maps", if (m.isEmpty()) TimerService.DEFAULT_MAPS else m)
             e.apply()
-            Toast.makeText(this, "Kaydedildi (oyundaki 'Ayar' menüsünü yeniden aç)", Toast.LENGTH_SHORT).show()
-        }
-        col.addView(save, lp(dp(6)))
+    }
 
-        val sv = ScrollView(this)
-        sv.setBackgroundColor(BG)
-        sv.addView(col)
-        setContentView(sv)
+    private lateinit var profBox: LinearLayout
+    private lateinit var profName: EditText
+
+    private fun renderProfiles() {
+        profBox.removeAllViews()
+        val names = TimerService.profileNames(prefs())
+        val active = prefs().getString("profile_active", "") ?: ""
+        if (names.isEmpty()) {
+            val t = TextView(this)
+            t.text = "Henüz profil yok."
+            t.setTextColor(DIM)
+            t.textSize = 12f
+            profBox.addView(t)
+        }
+        for (n in names) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            val t = TextView(this)
+            t.text = n + (if (n == active) "  ✓" else "")
+            t.textSize = 15f
+            t.setTextColor(Color.WHITE)
+            row.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val load = button("Yükle", false)
+            load.setOnClickListener {
+                TimerService.applyProfile(prefs(), n)
+                Toast.makeText(this, "Profil yüklendi: " + n, Toast.LENGTH_SHORT).show()
+                recreate()
+            }
+            row.addView(load, LinearLayout.LayoutParams(dp(84), ViewGroup.LayoutParams.WRAP_CONTENT))
+            val del = button("Sil", false)
+            del.setOnClickListener {
+                TimerService.deleteProfile(prefs(), n)
+                renderProfiles()
+            }
+            val dl = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT)
+            dl.leftMargin = dp(6)
+            row.addView(del, dl)
+            profBox.addView(row, lp(dp(6)))
+        }
     }
 
     private fun sw(parent: LinearLayout, text: String, key: String, def: Boolean): Switch {
