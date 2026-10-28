@@ -154,6 +154,11 @@ class MainActivity : Activity() {
         var mapsRaw = prefs().getString("cfg_maps", TimerService.DEFAULT_MAPS)!!
         mapsRaw = mapsRaw.replace("Swamp of Peace;1", "Swamp of Peace;3")
         if (!mapsRaw.lowercase().contains("vip domain 5")) mapsRaw = mapsRaw.trimEnd() + "\nVIP Domain 5;1"
+        if (!prefs().getBoolean("vip234Added", false)) {
+            for (n in listOf("2", "3", "4")) {
+                if (!mapsRaw.lowercase().contains("vip domain " + n)) mapsRaw = mapsRaw.trimEnd() + "\nVIP Domain " + n + ";1"
+            }
+        }
         if (!mapsRaw.lowercase().contains("swamp of peace")) mapsRaw = mapsRaw.trimEnd() + "\nSwamp of Peace;3"
         mapsEdit.setText(mapsRaw)
         mapsEdit.setTextColor(Color.WHITE)

@@ -106,7 +106,7 @@ class TimerService : AccessibilityService() {
 
     companion object {
         const val DEFAULT_MAPS = "Raklion 1;3\nRaklion 2;3\nRaklion 3;3\nDivine Realm;1\n" +
-            "High Heaven 1;1\nPurgatory of Misery 1;1\nEndless Abyss 1;1\nCorridor of Agony 1;1\nSwamp of Peace;3\nVIP Domain 5;1"
+            "High Heaven 1;1\nPurgatory of Misery 1;1\nEndless Abyss 1;1\nCorridor of Agony 1;1\nSwamp of Peace;3\nVIP Domain 2;1\nVIP Domain 3;1\nVIP Domain 4;1\nVIP Domain 5;1"
 
         /** Ayar menüsündeki gruplar. "Işınlanma bağlantıları" grubu haritalara göre ayrıca eklenir. */
         val GROUPS = listOf(
@@ -502,6 +502,12 @@ class TimerService : AccessibilityService() {
         if (!raw.lowercase().contains("vip domain 5")) {
             raw = raw.trimEnd() + "\nVIP Domain 5;1"
             prefs().edit().putString("cfg_maps", raw).apply()
+        }
+        if (!prefs().getBoolean("vip234Added", false)) {
+            for (n in listOf("2", "3", "4")) {
+                if (!raw.lowercase().contains("vip domain " + n)) raw = raw.trimEnd() + "\nVIP Domain " + n + ";1"
+            }
+            prefs().edit().putString("cfg_maps", raw).putBoolean("vip234Added", true).apply()
         }
         if (!raw.lowercase().contains("swamp of peace")) {
             // eski kayıtlı listeye yeni haritayı bir kez ekle
