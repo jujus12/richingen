@@ -203,7 +203,8 @@ class TimerService : AccessibilityService() {
             Triple("goldOn", "Golden", false),
             Triple("goldRandomOn", "G·Rnd", false),
             Triple("redOn", "Red boss", false),
-            Triple("redRandomOn", "R·Rnd", false)
+            Triple("redRandomOn", "R·Rnd", false),
+            Triple("recycleEachKill", "Her kesimde Rec", false)
         )
 
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
@@ -639,8 +640,10 @@ class TimerService : AccessibilityService() {
 
     // ------------------------------------------------------------------ ekran okuma
 
+    @Volatile private var shotGap = 900L
+
     private fun grab(): Bitmap? {
-        val gap = 1100L - (System.currentTimeMillis() - lastShot)
+        val gap = shotGap - (System.currentTimeMillis() - lastShot)
         if (gap > 0) Thread.sleep(gap)
         lastShot = System.currentTimeMillis()
         val latch = CountDownLatch(1)
@@ -662,7 +665,8 @@ class TimerService : AccessibilityService() {
                 }
 
                 override fun onFailure(errorCode: Int) {
-                    say("Ekran görüntüsü alınamadı (kod " + errorCode + ")")
+                    if (errorCode == 3) shotGap = minOf(1300L, shotGap + 100L)
+                    else say("Ekran görüntüsü alınamadı (kod " + errorCode + ")")
                     latch.countDown()
                 }
             })
@@ -699,7 +703,7 @@ class TimerService : AccessibilityService() {
                 handle?.visibility = View.VISIBLE
             }
         }
-        if (b != null && autoRunning && on("reviveOn") && deathScreen(b)) revive()
+        if (b != null && autoRunning && on("reviveOn") && deathScreen(b) && deathConfirmed(b)) revive()
         if (b != null && autoRunning && loginScreen(b)) loggedOut()
         return b
     }
@@ -751,6 +755,21 @@ class TimerService : AccessibilityService() {
         val g = Color.green(c)
         val b = Color.blue(c)
         return r in 130..225 && g in 80..160 && b <= 110 && r - g >= 25 && g - b >= 20
+    }
+
+    @Volatile private var deathDenied = 0L
+
+    /** Renk testi yanılabilir (kahverengi arayüz/harita): ölüm penceresinde 'Revival/Respawn' yazısı OCR ile doğrulanır. */
+    private fun deathConfirmed(b: Bitmap): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - deathDenied < 2500L) return false
+        val x0 = (0.30f * b.width).toInt()
+        val y0 = (0.34f * b.height).toInt()
+        val cr = Bitmap.createBitmap(b, x0, y0, (0.40f * b.width).toInt(), (0.34f * b.height).toInt())
+        val t = (ocr(cr)?.text ?: "").lowercase()
+        val ok = t.contains("revival") || t.contains("respawn") || t.contains("revive")
+        if (!ok) deathDenied = now
+        return ok
     }
 
     private fun deathScreen(b: Bitmap): Boolean {
@@ -1272,7 +1291,7 @@ class TimerService : AccessibilityService() {
             if (b != null && mapOpen(b)) return b
             lastRatio = if (b != null) orangeRatio(b, "closeMap", 1f) else -1f
             tapPoint("minimap")
-            pause(2000)
+            pause(1300)
         }
         fail("Harita açılamadı (X noktasında turuncu oranı " + String.format("%.3f", lastRatio) + ", gereken 0.06). 'Ayar' menüsünde closeMap noktasını harita açıkken X'in ortasına işaretle.")
     }
@@ -1422,13 +1441,13 @@ class TimerService : AccessibilityService() {
         }
         tapPx(tx, ty)
         gameAuto = false
-        pause(800)
+        pause(400)
         val arrive = cfgI("arrive", 45).toFloat()
         val limit = cfgI("walkTimeout", 90) * 1000L
         var t0 = System.currentTimeMillis()
         var retapped = false
         while (true) {
-            pause(400)
+            pause(100)
             val bb = shot() ?: continue
             if (!orangeAt(bb, "closeMap")) {
                 tapPoint("minimap")
@@ -1449,21 +1468,26 @@ class TimerService : AccessibilityService() {
             }
         }
         tapPoint("closeMap")
-        pause(500)
+        pause(300)
         say("Vardı: " + label)
     }
 
+    @Volatile private var lastLink = ""
+
     private fun openChatLink(link: String) {
         tapPoint("chat")
-        pause(1000)
-        tapPoint("pmTab")
         pause(700)
+        tapPoint("pmTab")
+        pause(450)
         tapPoint(link)
-        pause(600)
+        pause(400)
         if (prefs().contains("closeChat_x")) {
             tapPoint("closeChat")
-            pause(500)
+            pause(300)
         }
+        lastLink = link
+        goldHere = false
+        redHere = false
         gameAuto = false
     }
 
@@ -1701,6 +1725,23 @@ class TimerService : AccessibilityService() {
         }
     }
 
+    /**
+     * Bir boss/golden/red kesimi başlarken (varış + oto atak sonrası): pot her seferinde okunur, eşiğin altındaysa alınır,
+     * Recycle "her kesimde" açıksa ya da aralığı dolduysa yapılır. Savaş döngüsü bundan sonra başladığı için
+     * envanter mini haritayı kapatsa da ölü sanılmaz.
+     */
+    private fun fightMaint() {
+        if (!autoRunning) return
+        if (on("potOn")) potCheckNow()
+        if (on("recycleOn")) {
+            val each = on("recycleEachKill")
+            if (each || System.currentTimeMillis() - lastRecycle >= cfgI("recycleEvery", 20) * 60000L) {
+                say("Savaş başında Recycle")
+                doRecycle()
+            }
+        }
+    }
+
     /** Pot sayısını OCR ile okur; eşiğin altındaki pot varsa alır. Süreye değil okumaya bağlı. */
     private fun potCheckNow() {
         if (!on("potOn")) return
@@ -1799,12 +1840,12 @@ class TimerService : AccessibilityService() {
                     runBoss(due)
                     continue
                 }
-                if (on("goldOn") && System.currentTimeMillis() >= goldIdleUntil) {
-                    runGold()
-                    continue
-                }
                 if (on("redOn") && System.currentTimeMillis() >= redIdleUntil) {
                     runRed()
+                    continue
+                }
+                if (on("goldOn") && System.currentTimeMillis() >= goldIdleUntil) {
+                    runGold()
                     continue
                 }
                 if (on("farmOn") && !farming) {
@@ -1965,7 +2006,6 @@ class TimerService : AccessibilityService() {
             deathCnt.remove(e.id)
             ev("Kesildi: " + shortTitle(e) + " · yeni süre " + fmt((e.endMs - System.currentTimeMillis()) / 1000), true, 2)
             buffCheck()
-            potCheckNow()
         } else {
             ev("Boss başarısız: " + shortTitle(e))
             blocked[e.id] = System.currentTimeMillis() + 90000L
@@ -1984,19 +2024,21 @@ class TimerService : AccessibilityService() {
      * Boss henüz doğmamışsa sayaçtan doğmasını bekler; başkası kesmişse yeni sayaç görünür ve o kaydedilir.
      */
     private fun fightBoss(e: Entry): Boolean {
-        val t0 = System.currentTimeMillis()
+        var t0 = System.currentTimeMillis()
         val limit = cfgI("fightTimeout", 300) * 1000L
         setAuto(true)
         if (on("angelOn") && hasPt("angel")) {
             tapPoint("angel")
-            pause(500)
+            pause(300)
         }
         say(title(e) + "\nOto atak açık, boss bekleniyor")
+        fightMaint()
+        t0 = System.currentTimeMillis()
         var seen = false
         var dead = 0
         val early = ArrayList<Long>()
         while (true) {
-            pause(300)
+            pause(100)
             val b = shot() ?: continue
             val stamp = lastShot
             if (orangeAt(b, "closeMap")) {
@@ -2446,7 +2488,7 @@ class TimerService : AccessibilityService() {
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
         togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "randomOn"))
-        togGroup("BAKIM", listOf("potOn", "recycleOn", "buffOn"))
+        togGroup("BAKIM", listOf("potOn", "recycleOn", "recycleEachKill", "buffOn"))
         togGroup("SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
         // araçlar (varsayılan gizli)
@@ -3155,7 +3197,7 @@ class TimerService : AccessibilityService() {
             prefs().edit().putString("goldMap", gm).apply()
             say("Golden haritası: " + gm + " (şu an bulunduğun harita)")
         }
-        if (key(cur.first) == key(gm)) {
+        if (key(cur.first) == key(gm) && (lastLink.isEmpty() || lastLink == "goldLink" || lastLink == "redLink")) {
             if (mapInfo(gm).wires > 1 && cur.second != gw) {
                 say("Golden için Wire " + gw + " seçiliyor")
                 if (!switchTo(gw)) fail("Wire değişmedi (istenen Wire " + gw + ")")
@@ -3261,13 +3303,14 @@ class TimerService : AccessibilityService() {
         gameAuto = false
         setAuto(true)
         say(label + "\nOto atak açık, golden bekleniyor")
+        fightMaint()
         val t0 = System.currentTimeMillis()
         val limit = cfgI("fightTimeout", 300) * 1000L
         var seen = false
         var dead = 0
         var lastMapChk = t0
         while (true) {
-            pause(700)
+            pause(150)
             if (autoRunning && nextDue() != null) {
                 setAuto(false)
                 say("Boss zamanı geldi, golden bırakıldı")
@@ -3309,7 +3352,6 @@ class TimerService : AccessibilityService() {
         goldKills++
         ev("Golden kesildi")
         say("Golden kesildi, sıradakine geçiliyor")
-        potCheckNow()
         return true
     }
 
@@ -3628,7 +3670,7 @@ class TimerService : AccessibilityService() {
             prefs().edit().putString("redMap", gm).apply()
             say("Red boss haritası: " + gm + " (şu an bulunduğun harita)")
         }
-        if (key(cur.first) == key(gm)) {
+        if (key(cur.first) == key(gm) && (lastLink.isEmpty() || lastLink == "goldLink" || lastLink == "redLink")) {
             if (mapInfo(gm).wires > 1 && cur.second != gw) {
                 say("Red boss için Wire " + gw + " seçiliyor")
                 if (!switchTo(gw)) fail("Wire değişmedi (istenen Wire " + gw + ")")
@@ -3734,13 +3776,14 @@ class TimerService : AccessibilityService() {
         gameAuto = false
         setAuto(true)
         say(label + "\nOto atak açık, red boss bekleniyor")
+        fightMaint()
         val t0 = System.currentTimeMillis()
         val limit = cfgI("fightTimeout", 300) * 1000L
         var seen = false
         var dead = 0
         var lastMapChk = t0
         while (true) {
-            pause(700)
+            pause(150)
             if (autoRunning && nextDue() != null) {
                 setAuto(false)
                 say("Boss zamanı geldi, red boss bırakıldı")
@@ -3782,7 +3825,6 @@ class TimerService : AccessibilityService() {
         redKills++
         ev("Red boss kesildi")
         say("Red boss kesildi, sıradakine geçiliyor")
-        potCheckNow()
         return true
     }
 

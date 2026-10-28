@@ -96,6 +96,7 @@ class MainActivity : Activity() {
     private lateinit var buffOn: Switch
     private lateinit var potOn: Switch
     private lateinit var recycleOn: Switch
+    private lateinit var recycleEachKill: Switch
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -218,6 +219,7 @@ class MainActivity : Activity() {
         potOn = sw(shop, "Pot alma açık", "cfg_potOn", true)
         for (k in listOf("potMin", "potClicks", "potWatchSec")) addField(shop, shopFields.first { it.key == k })
         recycleOn = sw(shop, "Recycle açık (pot kapalı olsa da çalışır)", "cfg_recycleOn", true)
+        recycleEachKill = sw(shop, "Her boss/golden/red kesimi başlarken Recycle yap (aralığı beklemez)", "cfg_recycleEachKill", false)
         for (k in listOf("recycleEvery", "clickGap")) addField(shop, shopFields.first { it.key == k })
 
         val save = button("Kaydet", true)
@@ -283,6 +285,7 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_buffOn", buffOn.isChecked)
             e.putBoolean("cfg_potOn", potOn.isChecked)
             e.putBoolean("cfg_recycleOn", recycleOn.isChecked)
+            e.putBoolean("cfg_recycleEachKill", recycleEachKill.isChecked)
             e.putString("cfg_ntfy", ntfyEdit.text.toString().trim().replace(Regex("[^A-Za-z0-9_-]"), ""))
             val m = mapsEdit.text.toString().trim()
             e.putString("cfg_maps", if (m.isEmpty()) TimerService.DEFAULT_MAPS else m)
