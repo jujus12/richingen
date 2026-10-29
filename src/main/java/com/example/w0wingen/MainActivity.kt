@@ -161,8 +161,11 @@ class MainActivity : Activity() {
         }
         if (!prefs().getBoolean("aidaIcarusAdded", false)) {
             for (n in listOf("Aida 1", "Aida 2", "Icarus 1", "Icarus 3")) {
-                if (!mapsRaw.lowercase().contains(n.lowercase())) mapsRaw = mapsRaw.trimEnd() + "\n" + n + ";1"
+                if (!mapsRaw.lowercase().contains(n.lowercase())) mapsRaw = mapsRaw.trimEnd() + "\n" + n + ";3"
             }
+        }
+        if (!prefs().getBoolean("aidaIcarus3", false)) {
+            for (n in listOf("Aida 1", "Aida 2", "Icarus 1", "Icarus 3")) mapsRaw = mapsRaw.replace(n + ";1", n + ";3")
         }
         if (!mapsRaw.lowercase().contains("swamp of peace")) mapsRaw = mapsRaw.trimEnd() + "\nSwamp of Peace;3"
         mapsEdit.setText(mapsRaw)
