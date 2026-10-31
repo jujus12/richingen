@@ -106,7 +106,7 @@ class TimerService : AccessibilityService() {
 
     companion object {
         const val DEFAULT_MAPS = "Raklion 1;3\nRaklion 2;3\nRaklion 3;3\nDivine Realm;1\n" +
-            "High Heaven 1;1\nPurgatory of Misery 1;1\nEndless Abyss 1;1\nCorridor of Agony 1;1\nSwamp of Peace;3\nVIP Domain 2;1\nVIP Domain 3;1\nVIP Domain 4;1\nVIP Domain 5;1\nAida 1;3\nAida 2;3\nIcarus 1;3\nIcarus 3;3"
+            "High Heaven 1;1\nPurgatory of Misery 1;1\nEndless Abyss 1;1\nCorridor of Agony 1;1\nSwamp of Peace;3\nVIP Domain 2;1\nVIP Domain 3;1\nVIP Domain 4;1\nVIP Domain 5;1\nAida 1;3\nAida 2;3\nIcarus 1;3\nIcarus 3;3\nKanturu Ruins 1;3\nKanturu Ruins 2;3\nKanturu Relics 1;3\nKanturu Relics 2;3"
 
         /** Ayar menüsündeki gruplar. "Işınlanma bağlantıları" grubu haritalara göre ayrıca eklenir. */
         val GROUPS = listOf(
@@ -518,6 +518,12 @@ class TimerService : AccessibilityService() {
         if (!prefs().getBoolean("aidaIcarus3", false)) {
             for (n in listOf("Aida 1", "Aida 2", "Icarus 1", "Icarus 3")) raw = raw.replace(n + ";1", n + ";3")
             prefs().edit().putString("cfg_maps", raw).putBoolean("aidaIcarus3", true).apply()
+        }
+        if (!prefs().getBoolean("kanturuAdded", false)) {
+            for (n in listOf("Kanturu Ruins 1", "Kanturu Ruins 2", "Kanturu Relics 1", "Kanturu Relics 2")) {
+                if (!raw.lowercase().contains(n.lowercase())) raw = raw.trimEnd() + "\n" + n + ";3"
+            }
+            prefs().edit().putString("cfg_maps", raw).putBoolean("kanturuAdded", true).apply()
         }
         if (!raw.lowercase().contains("swamp of peace")) {
             // eski kayıtlı listeye yeni haritayı bir kez ekle
