@@ -378,6 +378,7 @@ class TimerService : AccessibilityService() {
     override fun onDestroy() {
         pollRun = false
         dogRun = false
+        stopRecording(false)
         pollThread?.interrupt()
         closeBossWin()
         closeStopwatch()
@@ -1644,7 +1645,23 @@ class TimerService : AccessibilityService() {
     }
 
     /** Inventory > Shop > iki Purchase düğmesine 3'er kez (toplam 6) > Inventory'yi kapat. Her adım arası 1 sn. */
-    private fun buyPots(buyHp: Boolean, buyMp: Boolean) {
+    private fun buyPots(buyHp0: Boolean, buyMp0: Boolean) {
+        var buyHp = buyHp0
+        var buyMp = buyMp0
+        if (buyHp && macroHas("pothp")) {
+            say("HP pot: kayıtlı işlem oynatılıyor")
+            playMacro("pothp")
+            buyHp = false
+        }
+        if (buyMp && macroHas("potmp")) {
+            say("MP pot: kayıtlı işlem oynatılıyor")
+            playMacro("potmp")
+            buyMp = false
+        }
+        if (!buyHp && !buyMp) {
+            ev("Pot alındı (kayıtlı işlem)", true, 2)
+            return
+        }
         val clicks = cfgI("potClicks", 3)
         val what = (if (buyHp) "HP" else "") + (if (buyHp && buyMp) " + " else "") + (if (buyMp) "MP" else "")
         say("Pot azaldı (" + what + "), alışverişe gidiliyor")
@@ -1674,6 +1691,11 @@ class TimerService : AccessibilityService() {
     private fun doRecycle() {
         say("Recycle yapılıyor")
         lastRecycle = System.currentTimeMillis()
+        if (macroHas("recycle")) {
+            playMacro("recycle")
+            say("Recycle tamam (kayıtlı işlem)")
+            return
+        }
         tapPoint("inventory")
         pause(gap())
         tapPoint("recycleTab")
@@ -2602,6 +2624,33 @@ class TimerService : AccessibilityService() {
         rlp.topMargin = dp(6)
         tb.addView(r1, rlp)
         boxMaintBtns.addView(r2, rlp)
+        val boxMacro = sect(tabMaint, "KAYITLI İŞLEMLER (kaydedersen bot bunları oynatır)")
+        for ((k, v) in macroNames) {
+            val mr = LinearLayout(this)
+            mr.orientation = LinearLayout.HORIZONTAL
+            mr.gravity = Gravity.CENTER_VERTICAL
+            val ml = TextView(this)
+            ml.textSize = 11f
+            ml.setTextColor(Color.WHITE)
+            macroLabels[k] = ml
+            mr.addView(ml, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val b1 = mkBtn("●") { startRecording(k) }
+            val b2 = mkBtn("▶") {
+                if (macroHas(k)) runManual { playMacro(k) } else say("Önce kaydet: " + v)
+            }
+            val b3 = mkBtn("✕") {
+                prefs().edit().remove("macro_" + k).apply()
+                refreshMacroLabels()
+            }
+            for (b in listOf(b1, b2, b3)) {
+                b.textSize = 12f
+                val bl = LinearLayout.LayoutParams(dp(40), dp(34))
+                bl.leftMargin = dp(4)
+                mr.addView(b, bl)
+            }
+            boxMacro.addView(mr, rlp)
+        }
+        refreshMacroLabels()
         boxAutoBtns.addView(
             btnRow(listOf<Pair<String, () -> Unit>>("Farma git" to { runManual { doFarm() } }), dp(36)),
             rlp
@@ -4513,6 +4562,243 @@ class TimerService : AccessibilityService() {
         wm.addView(outer, lp)
         bossWin = outer
         routeWinOpen = true
+    }
+
+    // ------------------------------------------------------------------ kayıtlı işlemler (makro): Recycle, HP pot, MP pot
+
+    private class Gest(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val dur: Long, val gap: Long)
+
+    private val macroNames = listOf(Pair("recycle", "Recycle"), Pair("pothp", "HP pot al"), Pair("potmp", "MP pot al"))
+    private val macroLabels = HashMap<String, TextView>()
+    private var recOverlay: View? = null
+    private var recLp: WindowManager.LayoutParams? = null
+    private var recBar: LinearLayout? = null
+    private var recInfo: TextView? = null
+    private var recName = ""
+    private val recList = ArrayList<Gest>()
+    @Volatile private var recording = false
+
+    private fun macroLoad(name: String): List<Gest> {
+        val out = ArrayList<Gest>()
+        try {
+            val a = JSONArray(prefs().getString("macro_" + name, "[]") ?: "[]")
+            for (i in 0 until a.length()) {
+                val o = a.getJSONArray(i)
+                out.add(Gest(o.getDouble(0).toFloat(), o.getDouble(1).toFloat(), o.getDouble(2).toFloat(), o.getDouble(3).toFloat(), o.getLong(4), o.getLong(5)))
+            }
+        } catch (e: Exception) {
+        }
+        return out
+    }
+
+    private fun macroSave(name: String, l: List<Gest>) {
+        val a = JSONArray()
+        for (g in l) {
+            val o = JSONArray()
+            o.put(g.x1.toDouble())
+            o.put(g.y1.toDouble())
+            o.put(g.x2.toDouble())
+            o.put(g.y2.toDouble())
+            o.put(g.dur)
+            o.put(g.gap)
+            a.put(o)
+        }
+        prefs().edit().putString("macro_" + name, a.toString()).apply()
+    }
+
+    private fun macroHas(name: String): Boolean = macroLoad(name).isNotEmpty()
+
+    private fun refreshMacroLabels() {
+        for ((k, v) in macroNames) {
+            val n = macroLoad(k).size
+            macroLabels[k]?.text = v + (if (n > 0) "  ·  " + n + " adım" else "  ·  kayıt yok")
+        }
+    }
+
+    /** Kaydedilmiş dokunuşları aynı sırayla ve aynı bekleme sürelerinde oynatır. */
+    private fun playMacro(name: String): Boolean {
+        val l = macroLoad(name)
+        if (l.isEmpty()) return false
+        refreshScreen()
+        for ((i, g) in l.withIndex()) {
+            pause(g.gap.coerceIn(150L, 5000L).toInt())
+            say("Kayıtlı işlem: " + name + " " + (i + 1) + "/" + l.size)
+            val x1 = g.x1 * screenW
+            val y1 = g.y1 * screenH
+            val x2 = g.x2 * screenW
+            val y2 = g.y2 * screenH
+            if (Math.abs(x2 - x1) < 30f && Math.abs(y2 - y1) < 30f && g.dur < 200L) tapPx(x1, y1)
+            else gesturePx(x1, y1, x2, y2, g.dur.coerceIn(60L, 3000L))
+        }
+        lastBeat = System.currentTimeMillis()
+        return true
+    }
+
+    private fun gesturePx(x1: Float, y1: Float, x2: Float, y2: Float, dur: Long): Boolean {
+        lastBeat = System.currentTimeMillis()
+        setThrough(true, x1, y1)
+        try {
+            Thread.sleep(40)
+            if (shizukuReady() && shell(arrayOf("input", "swipe", x1.toInt().toString(), y1.toInt().toString(), x2.toInt().toString(), y2.toInt().toString(), dur.toString()))) {
+                sent++
+                return true
+            }
+            val p = Path()
+            p.moveTo(x1, y1)
+            p.lineTo(x2, y2)
+            return runGesture(p, dur)
+        } finally {
+            setThrough(false)
+        }
+    }
+
+    private fun setRecThrough(through: Boolean) {
+        val latch = CountDownLatch(1)
+        ui {
+            try {
+                val v = recOverlay
+                val lp = recLp
+                if (v != null && lp != null) applyThrough(v, lp, through)
+            } catch (e: Exception) {
+            }
+            latch.countDown()
+        }
+        latch.await(500, TimeUnit.MILLISECONDS)
+    }
+
+    private fun updateRecInfo() {
+        ui { recInfo?.text = "● Kayıt: " + recName + " · " + recList.size + " adım" }
+    }
+
+    /** Kaydı başlatır: ekran şeffaf bir katmanla örtülür, her dokunuş kaydedilir ve hemen oyuna iletilir. */
+    private fun startRecording(name: String) {
+        if (autoRunning || busy) {
+            say("Otomasyon açıkken kayıt yapılamaz. Önce durdur.")
+            return
+        }
+        if (recording) return
+        if (!shizukuReady()) toast("Uyarı: Shizuku izni yok, dokunuşlar yedek yöntemle iletilecek")
+        refreshScreen()
+        recording = true
+        recName = name
+        recList.clear()
+        panelOpen = false
+        updateUi()
+        val v = View(this)
+        v.setBackgroundColor(0x14FF3030)
+        var dx = 0f
+        var dy = 0f
+        var dt = 0L
+        var lastEnd = SystemClock.elapsedRealtime() - 1500L
+        v.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    dx = ev.rawX
+                    dy = ev.rawY
+                    dt = SystemClock.elapsedRealtime()
+                }
+                MotionEvent.ACTION_UP -> {
+                    val now = SystemClock.elapsedRealtime()
+                    val ux = ev.rawX
+                    val uy = ev.rawY
+                    val dur = now - dt
+                    val gap = dt - lastEnd
+                    lastEnd = now
+                    recList.add(Gest(dx / screenW, dy / screenH, ux / screenW, uy / screenH, dur, gap))
+                    updateRecInfo()
+                    val x1 = dx
+                    val y1 = dy
+                    Thread {
+                        setRecThrough(true)
+                        try {
+                            Thread.sleep(30)
+                            if (Math.abs(ux - x1) < 30f && Math.abs(uy - y1) < 30f && dur < 200L) {
+                                if (!(shizukuReady() && shell(arrayOf("input", "tap", x1.toInt().toString(), y1.toInt().toString())))) {
+                                    val pp = Path()
+                                    pp.moveTo(x1, y1)
+                                    runGesture(pp, 70L)
+                                }
+                            } else {
+                                val d = dur.coerceIn(60L, 3000L)
+                                if (!(shizukuReady() && shell(arrayOf("input", "swipe", x1.toInt().toString(), y1.toInt().toString(), ux.toInt().toString(), uy.toInt().toString(), d.toString())))) {
+                                    val pp = Path()
+                                    pp.moveTo(x1, y1)
+                                    pp.lineTo(ux, uy)
+                                    runGesture(pp, d)
+                                }
+                            }
+                        } catch (e: Exception) {
+                        }
+                        setRecThrough(false)
+                    }.start()
+                }
+            }
+            true
+        }
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.background = rounded(0xEE161920.toInt(), 12)
+        bar.setPadding(dp(10), dp(6), dp(10), dp(6))
+        val info = TextView(this)
+        info.setTextColor(Color.WHITE)
+        info.textSize = 13f
+        info.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        info.text = "● Kayıt: " + name + " · 0 adım"
+        recInfo = info
+        bar.addView(info)
+        bar.addView(mkBtn("■ Bitir", OK, 0xFF04200F.toInt()) { stopRecording(true) }, LinearLayout.LayoutParams(dp(90), dp(38)).also { it.leftMargin = dp(10) })
+        bar.addView(mkBtn("İptal") { stopRecording(false) }, LinearLayout.LayoutParams(dp(70), dp(38)).also { it.leftMargin = dp(6) })
+        val blp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        blp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        blp.y = dp(8)
+        ui {
+            wm.addView(v, lp)
+            wm.addView(bar, blp)
+        }
+        recOverlay = v
+        recLp = lp
+        recBar = bar
+        say("Kayıt açık: " + name)
+        toast("Kayıt başladı. Şimdi işlemi oyunda yap, bitince ■ Bitir'e bas.")
+    }
+
+    private fun stopRecording(save: Boolean) {
+        if (!recording) return
+        recording = false
+        ui {
+            try {
+                recOverlay?.let { wm.removeView(it) }
+                recBar?.let { wm.removeView(it) }
+            } catch (e: Exception) {
+            }
+            recOverlay = null
+            recBar = null
+            recInfo = null
+            recLp = null
+            if (save) {
+                macroSave(recName, ArrayList(recList))
+                refreshMacroLabels()
+                toast("Kaydedildi: " + recName + " (" + recList.size + " adım)")
+            }
+            panelOpen = true
+            updateUi()
+        }
     }
 
     // ------------------------------------------------------------------ zaman kayıtları (günlük)
