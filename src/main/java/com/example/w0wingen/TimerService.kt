@@ -204,6 +204,7 @@ class TimerService : AccessibilityService() {
             Triple("goldRandomOn", "G·Rnd", false),
             Triple("redOn", "Red boss", false),
             Triple("redRandomOn", "R·Rnd", false),
+            Triple("routeOn", "Rota", false),
             Triple("recycleEachKill", "Her kesimde Rec", false)
         )
 
@@ -360,6 +361,7 @@ class TimerService : AccessibilityService() {
         loadEntries()
         loadGolds()
         loadReds()
+        loadRoute()
         buildUi()
         rebuildList()
         main.postDelayed(ticker, 1000)
@@ -1510,6 +1512,7 @@ class TimerService : AccessibilityService() {
         lastLink = link
         goldHere = false
         redHere = false
+        routeAt = false
         gameAuto = false
     }
 
@@ -1584,6 +1587,7 @@ class TimerService : AccessibilityService() {
         if (need.isNotEmpty()) fail("Önce 'Ayar' menüsünden işaretle: " + need.joinToString(", "))
         goldHere = false
         redHere = false
+        routeAt = false
         closeMapIfOpen()
         setAuto(false)
         val fw = cfgI("farmWire", 3)
@@ -1722,6 +1726,7 @@ class TimerService : AccessibilityService() {
 
     /** Buff açıksa ATK/DEF'e bakar, ikisi de alt sınırın altındaysa buff'a gider. */
     private fun buffCheck() {
+        lastBuffChk = System.currentTimeMillis()
         if (!on("buffOn")) return
         closeMapIfOpen()
         val b = shot() ?: return
@@ -1862,6 +1867,14 @@ class TimerService : AccessibilityService() {
                     runBoss(due)
                     continue
                 }
+                if (on("buffOn") && now - lastBuffChk >= cfgI("buffWatchSec", 45) * 1000L) {
+                    buffCheck()
+                    continue
+                }
+                if (on("routeOn") && routeSnapshot().isNotEmpty()) {
+                    runRoute()
+                    continue
+                }
                 if (on("redOn") && System.currentTimeMillis() >= redIdleUntil) {
                     runRed()
                     continue
@@ -1878,6 +1891,7 @@ class TimerService : AccessibilityService() {
             } catch (e: Revived) {
                 goldHere = false
                 redHere = false
+                routeAt = false
                 val dead = currentId
                 currentId = 0L
                 var skipped = ""
@@ -1902,6 +1916,7 @@ class TimerService : AccessibilityService() {
                 fails++
                 goldHere = false
                 redHere = false
+                routeAt = false
                 val id = currentId
                 if (id != 0L) {
                     blocked[id] = System.currentTimeMillis() + 90000L
@@ -2013,6 +2028,7 @@ class TimerService : AccessibilityService() {
         currentId = e.id
         goldHere = false
         redHere = false
+        routeAt = false
         ui { rebuildList() }
         if (farming) {
             setAuto(false)
@@ -2509,7 +2525,7 @@ class TimerService : AccessibilityService() {
         pbl.topMargin = dp(6)
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
-        togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "randomOn"))
+        togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "randomOn"))
         togGroup("BAKIM", listOf("potOn", "recycleOn", "recycleEachKill", "buffOn"))
         togGroup("SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
@@ -2561,6 +2577,15 @@ class TimerService : AccessibilityService() {
             dp(36)
         )
         tb.addView(r5, rlp)
+        val r6 = btnRow(
+            listOf<Pair<String, () -> Unit>>(
+                "Canlı boss kaydet" to { runManual { doSaveAlive() } },
+                "Durak ekle" to { runManual { addStop() } },
+                "Rota listesi" to { toggleRouteWin() }
+            ),
+            dp(36)
+        )
+        tb.addView(r6, rlp)
         val rr = LinearLayout(this)
         rr.orientation = LinearLayout.HORIZONTAL
         rr.gravity = Gravity.CENTER_VERTICAL
@@ -2785,8 +2810,9 @@ class TimerService : AccessibilityService() {
             val gw = goldWinOpen
             val sw = stampWinOpen
             val rw = redWinOpen
+            val tw = routeWinOpen
             closeBossWin()
-            if (sw) toggleStampWin() else if (rw) toggleRedWin() else if (gw) toggleGoldWin() else toggleBossWin()
+            if (sw) toggleStampWin() else if (tw) toggleRouteWin() else if (rw) toggleRedWin() else if (gw) toggleGoldWin() else toggleBossWin()
         }
         val l = listCol ?: return
         l.removeAllViews()
@@ -2898,6 +2924,7 @@ class TimerService : AccessibilityService() {
         bossWin = null
         goldWinOpen = false
         redWinOpen = false
+        routeWinOpen = false
         stampWinOpen = false
         winTimers.clear()
     }
@@ -3248,6 +3275,7 @@ class TimerService : AccessibilityService() {
     /** Otomasyondan: bir golden turu; hiç golden bulunamazsa bir süre golden'a bakmaz. */
     private fun runGold() {
         redHere = false
+        routeAt = false
         if (goldCycle(null)) fails = 0
         else goldIdleUntil = System.currentTimeMillis() + cfgI("goldRetry", 15) * 1000L
     }
@@ -4085,6 +4113,321 @@ class TimerService : AccessibilityService() {
         redWinOpen = true
     }
 
+
+    // ------------------------------------------------------------------ rota (duraklar sırayla gezilir, canlı bosslar kesilir) ve canlı boss kaydı
+
+    private class Stop(val id: Long, val map: String, val wire: Int, val px: Float, val py: Float)
+
+    private val route = ArrayList<Stop>()
+    private val routeSkip = ArrayList<Pair<PointF, Long>>()
+    private var routeKills = 0
+    private var routeWinOpen = false
+    @Volatile private var routeIdx = 0
+    @Volatile private var routeAt = false
+    @Volatile private var lastBuffChk = 0L
+
+    private fun loadRoute() {
+        synchronized(lock) {
+            route.clear()
+            try {
+                val a = JSONArray(prefs().getString("route", "[]") ?: "[]")
+                for (i in 0 until a.length()) {
+                    val o = a.getJSONObject(i)
+                    route.add(Stop(o.getLong("id"), o.getString("map"), o.getInt("wire"), o.getDouble("px").toFloat(), o.getDouble("py").toFloat()))
+                }
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    private fun saveRoute() {
+        val a = JSONArray()
+        synchronized(lock) {
+            for (t in route) {
+                val o = JSONObject()
+                o.put("id", t.id)
+                o.put("map", t.map)
+                o.put("wire", t.wire)
+                o.put("px", t.px.toDouble())
+                o.put("py", t.py.toDouble())
+                a.put(o)
+            }
+        }
+        prefs().edit().putString("route", a.toString()).apply()
+    }
+
+    private fun routeSnapshot(): List<Stop> = synchronized(lock) { ArrayList(route) }
+
+    /** Karakterin şu anki harita, wire ve haritadaki noktasını okur. */
+    private fun readHere(): Triple<String, Int, PointF> {
+        closeMapIfOpen()
+        val info = readMapWireRetry()
+        val mb = ensureMap()
+        val me = findPlayer(mb)
+        tapPoint("closeMap")
+        pause(600)
+        if (me == null) fail("Harita noktası alınamadı (yeşil imleç görünmedi). Tekrar bas.")
+        return Triple(info.first, info.second, PointF(me.x / mb.width, me.y / mb.height))
+    }
+
+    /** Rotaya durak ekler: bulunduğun harita, wire ve nokta kaydedilir. */
+    private fun addStop() {
+        say("Durak okunuyor...")
+        val h = readHere()
+        val n: Int
+        synchronized(lock) {
+            route.add(Stop(System.currentTimeMillis(), h.first, h.second, h.third.x, h.third.y))
+            n = route.size
+        }
+        saveRoute()
+        say("Durak " + n + " eklendi: " + shortMap(h.first) + " W" + h.second)
+        toast("Rota durağı " + n + ": " + h.first + " W" + h.second)
+    }
+
+    /** Boss yaşıyorken (mezar sayacı yokken) kaydeder: hemen vakti gelmiş sayılır, bot gidip keser ve sayacı kaydeder. */
+    private fun doSaveAlive() {
+        say("Canlı boss okunuyor...")
+        val h = readHere()
+        val e = upsert(h.first, h.second, System.currentTimeMillis(), h.third.x, h.third.y)
+        ui { rebuildList() }
+        say("Canlı boss kaydedildi: " + title(e) + " (vakti geldi sayılır)")
+    }
+
+    /** Rotada bir tur: sıradaki durağa gider, orada canlı boss ikonu kalmayana kadar keser, sonra sonraki durağa geçer. */
+    private fun runRoute() {
+        goldHere = false
+        redHere = false
+        if (farming) {
+            setAuto(false)
+            farming = false
+        }
+        val stops = routeSnapshot()
+        if (stops.isEmpty()) return
+        val i = routeIdx % stops.size
+        val st = stops[i]
+        if (!routeAt) {
+            say("Rota " + (i + 1) + "/" + stops.size + ": " + shortMap(st.map) + " W" + st.wire)
+            ensureLocation(st.map, st.wire)
+            approach(ensureMap(), st.px, st.py, "Durak " + (i + 1), cfgI("radius", 200).toFloat(), on("randomOn"))
+            routeAt = true
+        }
+        if (routeKill()) {
+            fails = 0
+        } else {
+            routeIdx = (i + 1) % stops.size
+            routeAt = false
+        }
+    }
+
+    private fun routeKill(): Boolean {
+        if (farming) {
+            setAuto(false)
+            farming = false
+        }
+        var mb = ensureMap()
+        refreshScreen()
+        val sc = mb.width / 2560f
+        val marks = emptyList<PointF>()
+        val radius = 0f
+        val useRandom = false
+        val maxTry = cfgI("randomMax", 40)
+        var tries = 0
+        var best: PointF? = null
+        var bd = Float.MAX_VALUE
+        while (true) {
+            val now = System.currentTimeMillis()
+            routeSkip.removeAll { it.second < now }
+            val me = findPlayer(mb)
+            best = null
+            bd = Float.MAX_VALUE
+            for (k in scanSkulls(mb) { isRedIcon(it) || isBossRed(it) }) {
+                if (marks.isNotEmpty() && marks.none { dist(it, k) <= 45f * sc }) continue
+                if (routeSkip.any { dist(it.first, k) <= 30f * sc }) continue
+                val d = if (me != null) dist(me, k) else 0f
+                if (d < bd) {
+                    bd = d
+                    best = k
+                }
+            }
+            if (best == null) {
+                if (useRandom && tries < maxTry) {
+                    tries++
+                    say("Boss görünmüyor, Random " + tries + "/" + maxTry)
+                    tapPoint("random")
+                    gameAuto = false
+                    pause((cfgF("randomWait", 2.5f) * 1000).toInt())
+                    mb = ensureMap()
+                    continue
+                }
+                tapPoint("closeMap")
+                pause(600)
+                say("Boss görünmüyor")
+                return false
+            }
+            if (!useRandom || me == null || bd <= radius || tries >= maxTry) break
+            tries++
+            say("En yakın boss " + bd.toInt() + " px uzakta, Random " + tries + "/" + maxTry)
+            tapPoint("random")
+            gameAuto = false
+            pause((cfgF("randomWait", 2.5f) * 1000).toInt())
+            mb = ensureMap()
+        }
+        val tgt = best!!
+        val label = "Boss (" + (if (bd < Float.MAX_VALUE / 2) bd.toInt().toString() + " px" else "?") + ")"
+        try {
+            approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
+        } catch (e: StepFail) {
+            routeSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
+            return true
+        }
+        gameAuto = false
+        setAuto(true)
+        say(label + "\nOto atak açık, boss bekleniyor")
+        fightMaint()
+        val t0 = System.currentTimeMillis()
+        val limit = cfgI("fightTimeout", 300) * 1000L
+        var seen = false
+        var dead = 0
+        var lastMapChk = t0
+        while (true) {
+            pause(150)
+            if (autoRunning && nextDue() != null) {
+                setAuto(false)
+                say("Boss zamanı geldi, boss bırakıldı")
+                return true
+            }
+            val b = shot() ?: continue
+            if (orangeAt(b, "closeMap")) {
+                tapPoint("closeMap")
+                pause(600)
+                continue
+            }
+            val now = System.currentTimeMillis()
+            if (miniRedAlive(b)) {
+                seen = true
+                dead = 0
+                say(label + "\nBoss canlı, savaşılıyor")
+            } else if (seen) {
+                dead++
+                say(label + "\nBoss öldü mü? " + dead + "/3")
+                if (dead >= 3) break
+            } else if (now - t0 > 8000 && now - lastMapChk > 10000) {
+                lastMapChk = now
+                val mb2 = ensureMap()
+                var still = false
+                for (k in scanSkulls(mb2) { isRedIcon(it) || isBossRed(it) }) if (dist(k, tgt) < 35f * sc) still = true
+                val me = findPlayer(mb2)
+                val onTop = me != null && dist(me, tgt) <= cfgI("arrive", 45) * 1.5f
+                tapPoint("closeMap")
+                pause(700)
+                if (!still && !onTop) break
+            }
+            if (now - t0 > limit) {
+                routeSkip.add(Pair(tgt, System.currentTimeMillis() + 120000L))
+                setAuto(false)
+                say("Boss zaman aşımı, bu nokta atlandı")
+                return true
+            }
+        }
+        routeKills++
+        ev("Boss kesildi")
+        say("Boss kesildi, sıradakine geçiliyor")
+        return true
+    }
+
+    private fun toggleRouteWin() {
+        if (bossWin != null) {
+            val was = routeWinOpen
+            closeBossWin()
+            if (was) return
+        }
+        refreshScreen()
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.background = rounded(PANEL_BG, 16)
+        outer.setPadding(dp(14), dp(12), dp(14), dp(14))
+        val list = routeSnapshot()
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        val t = TextView(this)
+        t.text = "Rota (" + list.size + " durak)"
+        t.textSize = 16f
+        t.setTextColor(Color.WHITE)
+        t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        head.addView(t, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        head.addView(mkBtn("Temizle", BAD) {
+            synchronized(lock) { route.clear() }
+            saveRoute()
+            routeIdx = 0
+            routeAt = false
+            closeBossWin()
+            toggleRouteWin()
+        }, LinearLayout.LayoutParams(dp(90), dp(36)))
+        head.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+        head.addView(mkBtn("Kapat ✕") { closeBossWin() }, LinearLayout.LayoutParams(dp(90), dp(36)))
+        outer.addView(head)
+        val hint = TextView(this)
+        hint.text = "Rota açıkken bot duraklarda sırayla gezer, haritadaki canlı bossları keser. Durak eklemek için karakteri yere götürüp Araçlar'da 'Durak ekle'ye bas. Silmek için ✕'e uzun bas."
+        hint.textSize = 11f
+        hint.setTextColor(TEXT_DIM)
+        hint.setPadding(0, dp(4), 0, dp(4))
+        outer.addView(hint)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        val sv = ScrollView(this)
+        sv.addView(col)
+        outer.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        if (list.isEmpty()) {
+            val e0 = TextView(this)
+            e0.text = "Henüz durak yok."
+            e0.setTextColor(TEXT_DIM)
+            col.addView(e0)
+        }
+        for ((i, st) in list.withIndex()) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(CARD_BG, 10)
+            row.setPadding(dp(12), dp(8), dp(8), dp(8))
+            val n = TextView(this)
+            n.text = "#" + (i + 1)
+            n.textSize = 12f
+            n.setTextColor(TEXT_DIM)
+            row.addView(n, LinearLayout.LayoutParams(dp(40), LinearLayout.LayoutParams.WRAP_CONTENT))
+            val tt = TextView(this)
+            tt.text = shortMap(st.map) + " · Wire " + st.wire
+            tt.textSize = 15f
+            tt.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            tt.setTextColor(Color.WHITE)
+            row.addView(tt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val del = TextView(this)
+            del.text = "✕"
+            del.textSize = 16f
+            del.setTextColor(TEXT_DIM)
+            del.setPadding(dp(14), dp(6), dp(6), dp(6))
+            del.setOnLongClickListener {
+                synchronized(lock) { route.remove(st) }
+                saveRoute()
+                routeAt = false
+                closeBossWin()
+                toggleRouteWin()
+                true
+            }
+            row.addView(del)
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(6)
+            col.addView(row, lp)
+        }
+        val w = minOf(dp(440), (screenW * 0.6f).toInt())
+        val lp = overlayParams(w)
+        lp.height = (screenH * 0.82f).toInt()
+        lp.x = (screenW - w) / 2
+        lp.y = (screenH - lp.height) / 2
+        wm.addView(outer, lp)
+        bossWin = outer
+        routeWinOpen = true
+    }
 
     // ------------------------------------------------------------------ zaman kayıtları (günlük)
 

@@ -89,6 +89,7 @@ class MainActivity : Activity() {
     private lateinit var goldOn: Switch
     private lateinit var goldRandomOn: Switch
     private lateinit var redOn: Switch
+    private lateinit var routeOn: Switch
     private lateinit var redRandomOn: Switch
     private lateinit var impOn: Switch
     private lateinit var angelOn: Switch
@@ -219,6 +220,9 @@ class MainActivity : Activity() {
         randomOn = sw(move, "Bossa giderken Random ışınlanma açık", "cfg_randomOn", true)
         for (f in moveFields) addField(move, f)
 
+        val rt = card(col, "Rota")
+        routeOn = sw(rt, "Rota açık: duraklarda sırayla gez, canlı bossları kes (açıkken golden/red/farm çalışmaz; oyunda Araçlar > Durak ekle)", "cfg_routeOn", false)
+
         val gold = card(col, "Golden canavarlar")
         goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farm yerine; ikisini birlikte açma)", "cfg_goldOn", false)
         goldRandomOn = sw(gold, "Golden'a giderken Random kullan", "cfg_goldRandomOn", false)
@@ -296,6 +300,7 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_goldOn", goldOn.isChecked)
             e.putBoolean("cfg_goldRandomOn", goldRandomOn.isChecked)
             e.putBoolean("cfg_redOn", redOn.isChecked)
+            e.putBoolean("cfg_routeOn", routeOn.isChecked)
             e.putBoolean("cfg_redRandomOn", redRandomOn.isChecked)
             e.putBoolean("cfg_impOn", impOn.isChecked)
             e.putBoolean("cfg_angelOn", angelOn.isChecked)
