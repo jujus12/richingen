@@ -205,8 +205,7 @@ class TimerService : AccessibilityService() {
             Triple("redOn", "Red boss", false),
             Triple("redRandomOn", "R·Rnd", false),
             Triple("routeOn", "Rota", false),
-            Triple("routeRandomOn", "Rota Rnd", false),
-            Triple("recycleEachKill", "Her kesimde Rec", false)
+            Triple("routeRandomOn", "Rota Rnd", false)
         )
 
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
@@ -1691,6 +1690,7 @@ class TimerService : AccessibilityService() {
     private fun doRecycle() {
         say("Recycle yapılıyor")
         lastRecycle = System.currentTimeMillis()
+        fightsSinceRec = 0
         if (macroHas("recycle")) {
             playMacro("recycle")
             say("Recycle tamam (kayıtlı işlem)")
@@ -1783,21 +1783,27 @@ class TimerService : AccessibilityService() {
     }
 
     /**
-     * Bir boss/golden/red kesimi başlarken (varış + oto atak sonrası): pot her seferinde okunur, eşiğin altındaysa alınır,
-     * Recycle "her kesimde" açıksa ya da aralığı dolduysa yapılır. Savaş döngüsü bundan sonra başladığı için
+     * Bir boss/golden/red kesimi başlarken (varış + oto atak sonrası): pot dakikada bir (potWatchSec) okunur, eşiğin altındaysa kayıtlı işlemle alınır,
+     * Recycle her N kesimde bir (recycleKillEvery) ya da süre aralığı dolunca yapılır. Savaş döngüsü bundan sonra başladığı için
      * envanter mini haritayı kapatsa da ölü sanılmaz.
      */
     private fun fightMaint() {
         if (!autoRunning) return
-        if (on("potOn")) potCheckNow()
+        fightsSinceRec++
+        val now = System.currentTimeMillis()
+        if (on("potOn") && now - lastPot >= cfgI("potWatchSec", 60) * 1000L) potCheckNow()
         if (on("recycleOn")) {
-            val each = on("recycleEachKill")
-            if (each || System.currentTimeMillis() - lastRecycle >= cfgI("recycleEvery", 20) * 60000L) {
-                say("Savaş başında Recycle")
+            val n = cfgI("recycleKillEvery", 0)
+            val byKills = n > 0 && fightsSinceRec >= n
+            val byTime = System.currentTimeMillis() - lastRecycle >= cfgI("recycleEvery", 20) * 60000L
+            if (byKills || byTime) {
+                say("Savaş başında Recycle" + (if (byKills) " (" + fightsSinceRec + " kesim)" else ""))
                 doRecycle()
             }
         }
     }
+
+    @Volatile private var fightsSinceRec = 0
 
     /** Pot sayısını OCR ile okur; eşiğin altındaki pot varsa alır. Süreye değil okumaya bağlı. */
     private fun potCheckNow() {
@@ -2593,7 +2599,7 @@ class TimerService : AccessibilityService() {
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
         togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "routeRandomOn", "randomOn"))
-        togGroup(tabMaint, "BAKIM", listOf("potOn", "recycleOn", "recycleEachKill", "buffOn"))
+        togGroup(tabMaint, "BAKIM", listOf("potOn", "recycleOn", "buffOn"))
         togGroup(tabAuto, "SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
         val boxMaintBtns = sect(tabMaint, "ELLE")

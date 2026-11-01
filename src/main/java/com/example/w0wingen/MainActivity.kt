@@ -60,7 +60,8 @@ class MainActivity : Activity() {
         Field("potMin", "Pot eşiği", "HP veya MP pot sayısı bunun altına inerse alışverişe gidilir", "20"),
         Field("clickGap", "Tık aralığı", "Pot ve Recycle adımları arasındaki bekleme (sn). Oyundaki panelden de değişir", "1.0", true),
         Field("potClicks", "Pot alma tık sayısı", "Eksik olan pot için Purchase düğmesine bu kadar basılır (her basış 99 adet)", "3"),
-        Field("potWatchSec", "Farmda pot okuma sıklığı", "Pot sayısı OCR ile okunur, eşiğin altındaysa alınır. Boss kesince ve golden kesince de okunur. Farmda bu kadar saniyede bir (sn)", "60"),
+        Field("potWatchSec", "Pot okuma sıklığı", "Pot sayısı OCR ile okunur, eşiğin altındaysa kayıtlı işlemle (yoksa eski yöntemle) alınır. Farmda ve her kesim başında bu kadar saniyede bir bakılır (sn, 60 = dakikada bir)", "60"),
+        Field("recycleKillEvery", "Her kaç kesimde bir Recycle", "Boss/golden/red/rota kesimi her başladığında sayılır; bu sayıya ulaşınca Recycle yapılır (0 = kapalı). Recycle açıkken yapılır", "0"),
         Field("recycleEvery", "Recycle aralığı", "Otomasyon açıkken bu kadar dakikada bir Recycle yapılır (dk). Pot kapalı olsa da çalışır", "20")
     )
 
@@ -102,7 +103,6 @@ class MainActivity : Activity() {
     private lateinit var buffOn: Switch
     private lateinit var potOn: Switch
     private lateinit var recycleOn: Switch
-    private lateinit var recycleEachKill: Switch
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -283,8 +283,7 @@ class MainActivity : Activity() {
         potOn = sw(shop, "Pot alma açık", "cfg_potOn", true)
         for (k in listOf("potMin", "potClicks", "potWatchSec")) addField(shop, shopFields.first { it.key == k })
         recycleOn = sw(shop, "Recycle açık (pot kapalı olsa da çalışır)", "cfg_recycleOn", true)
-        recycleEachKill = sw(shop, "Her boss/golden/red kesimi başlarken Recycle yap (aralığı beklemez)", "cfg_recycleEachKill", false)
-        for (k in listOf("recycleEvery", "clickGap")) addField(shop, shopFields.first { it.key == k })
+        for (k in listOf("recycleKillEvery", "recycleEvery", "clickGap")) addField(shop, shopFields.first { it.key == k })
 
         val save = button("Kaydet", true)
         save.setOnClickListener {
@@ -330,7 +329,6 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_buffOn", buffOn.isChecked)
             e.putBoolean("cfg_potOn", potOn.isChecked)
             e.putBoolean("cfg_recycleOn", recycleOn.isChecked)
-            e.putBoolean("cfg_recycleEachKill", recycleEachKill.isChecked)
             e.putString("cfg_ntfy", ntfyEdit.text.toString().trim().replace(Regex("[^A-Za-z0-9_-]"), ""))
             val m = mapsEdit.text.toString().trim()
             e.putString("cfg_maps", if (m.isEmpty()) TimerService.DEFAULT_MAPS else m)
