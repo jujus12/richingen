@@ -150,6 +150,13 @@ class MainActivity : Activity() {
                 profName.setText("")
                 Toast.makeText(this, "Profil kaydedildi: " + n, Toast.LENGTH_SHORT).show()
                 renderProfiles()
+            }
+        }
+        profCard.addView(ps, lp(dp(8)))
+        profBox = LinearLayout(this)
+        profBox.orientation = LinearLayout.VERTICAL
+        profCard.addView(profBox, lp(dp(8)))
+        renderProfiles()
 
         val setup = card(col, "Kurulum")
         val steps = TextView(this)
@@ -273,13 +280,6 @@ class MainActivity : Activity() {
             Toast.makeText(this, "Kaydedildi (oyundaki 'Ayar' menüsünü yeniden aç)", Toast.LENGTH_SHORT).show()
         }
 
-            }
-        }
-        profCard.addView(ps, lp(dp(8)))
-        profBox = LinearLayout(this)
-        profBox.orientation = LinearLayout.VERTICAL
-        profCard.addView(profBox, lp(dp(8)))
-        renderProfiles()
 
         val sv = ScrollView(this)
         sv.setBackgroundColor(BG)
