@@ -4296,15 +4296,6 @@ class TimerService : AccessibilityService() {
                 }
             }
             if (best == null) {
-                if (useRandom && tries < maxTry) {
-                    tries++
-                    say("Boss görünmüyor, Random " + tries + "/" + maxTry)
-                    tapPoint("random")
-                    gameAuto = false
-                    pause((cfgF("randomWait", 2.5f) * 1000).toInt())
-                    mb = ensureMap()
-                    continue
-                }
                 tapPoint("closeMap")
                 pause(600)
                 say("Boss görünmüyor")
