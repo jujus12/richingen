@@ -205,6 +205,7 @@ class TimerService : AccessibilityService() {
             Triple("redOn", "Red boss", false),
             Triple("redRandomOn", "R·Rnd", false),
             Triple("routeOn", "Rota", false),
+            Triple("routeRandomOn", "Rota Rnd", false),
             Triple("recycleEachKill", "Her kesimde Rec", false)
         )
 
@@ -314,6 +315,7 @@ class TimerService : AccessibilityService() {
     private var redKills = 0
     private var redWinOpen = false
     private var redRadiusView: TextView? = null
+    private var routeRadiusView: TextView? = null
     private var goldKills = 0
     private var goldWinOpen = false
     private var stampWinOpen = false
@@ -2301,6 +2303,12 @@ class TimerService : AccessibilityService() {
         panel?.alpha = v / 100f
     }
 
+    private fun changeRouteRadius(delta: Int) {
+        val v = (cfgI("routeRadius", 150) + delta).coerceIn(0, 1000)
+        prefs().edit().putString("cfg_routeRadius", v.toString()).apply()
+        routeRadiusView?.text = v.toString()
+    }
+
     private fun changeRedRadius(delta: Int) {
         val v = (cfgI("redRadius", 150) + delta).coerceIn(0, 1000)
         prefs().edit().putString("cfg_redRadius", v.toString()).apply()
@@ -2346,6 +2354,7 @@ class TimerService : AccessibilityService() {
         radiusView?.text = cfgI("radius", 200).toString()
         goldRadiusView?.text = cfgI("goldRadius", 150).toString()
         redRadiusView?.text = cfgI("redRadius", 150).toString()
+        routeRadiusView?.text = cfgI("routeRadius", 150).toString()
         gapView?.text = String.format("%.2f", gap() / 1000f)
         say("Profil yüklendi: " + next)
         toast("Profil: " + next)
@@ -2555,7 +2564,7 @@ class TimerService : AccessibilityService() {
         pbl.topMargin = dp(6)
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
-        togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "randomOn"))
+        togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "routeRandomOn", "randomOn"))
         togGroup(tabMaint, "BAKIM", listOf("potOn", "recycleOn", "recycleEachKill", "buffOn"))
         togGroup(tabAuto, "SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
@@ -2678,6 +2687,24 @@ class TimerService : AccessibilityService() {
         rq.addView(rqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         rq.addView(mkBtn("+") { changeRedRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         boxRed.addView(rq, rlp)
+        val tq = LinearLayout(this)
+        tq.orientation = LinearLayout.HORIZONTAL
+        tq.gravity = Gravity.CENTER_VERTICAL
+        val tql = TextView(this)
+        tql.text = "Rota Random yarıçap (px)"
+        tql.textSize = 11f
+        tql.setTextColor(Color.WHITE)
+        tq.addView(tql, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val tqv = TextView(this)
+        tqv.text = cfgI("routeRadius", 150).toString()
+        tqv.textSize = 13f
+        tqv.gravity = Gravity.CENTER
+        tqv.setTextColor(ACCENT)
+        routeRadiusView = tqv
+        tq.addView(mkBtn("−") { changeRouteRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+        tq.addView(tqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
+        tq.addView(mkBtn("+") { changeRouteRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+        boxRoute.addView(tq, rlp)
         val gr = LinearLayout(this)
         gr.orientation = LinearLayout.HORIZONTAL
         gr.gravity = Gravity.CENTER_VERTICAL
@@ -4247,8 +4274,8 @@ class TimerService : AccessibilityService() {
         refreshScreen()
         val sc = mb.width / 2560f
         val marks = emptyList<PointF>()
-        val radius = 0f
-        val useRandom = false
+        val radius = cfgI("routeRadius", 150).toFloat()
+        val useRandom = on("routeRandomOn") && radius > 0f && hasPt("random")
         val maxTry = cfgI("randomMax", 40)
         var tries = 0
         var best: PointF? = null

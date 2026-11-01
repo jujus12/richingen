@@ -69,6 +69,10 @@ class MainActivity : Activity() {
         Field("redRetry", "Red boss yeniden bakma", "Haritada hiç canlı red boss görünmezse bu kadar saniye sonra tekrar bakılır (sn)", "15")
     )
 
+    private val routeFields = listOf(
+        Field("routeRadius", "Rota Random yarıçapı", "En yakın canlı boss bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150")
+    )
+
     private val goldFields = listOf(
         Field("goldWire", "Golden wire", "Golden kesilecek wire (farm ve buff gibi önce bu wire'a geçilir)", "3"),
         Field("goldRadius", "Golden Random yarıçapı", "Golden noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
@@ -90,6 +94,7 @@ class MainActivity : Activity() {
     private lateinit var goldRandomOn: Switch
     private lateinit var redOn: Switch
     private lateinit var routeOn: Switch
+    private lateinit var routeRandomOn: Switch
     private lateinit var redRandomOn: Switch
     private lateinit var impOn: Switch
     private lateinit var angelOn: Switch
@@ -252,6 +257,8 @@ class MainActivity : Activity() {
 
         val rt = card(col, "Rota")
         routeOn = sw(rt, "Rota açık: rotadaki haritaları sırayla gez, her haritanın tüm wire'larında canlı bossları kes (açıkken golden/red/farm çalışmaz; rotayı oyunda İşaret sekmesi > Rota listesi'nden kur)", "cfg_routeOn", false)
+        routeRandomOn = sw(rt, "Rota: canlı boss uzaksa Random ışınlanma kullan", "cfg_routeRandomOn", false)
+        for (f in routeFields) addField(rt, f)
 
         val gold = card(col, "Golden canavarlar")
         goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farm yerine; ikisini birlikte açma)", "cfg_goldOn", false)
@@ -298,7 +305,7 @@ class MainActivity : Activity() {
 
     private fun writeSettings() {
             val e = prefs().edit()
-            val all = autoFields + farmFields + moveFields + goldFields + redFields + buffFields + shopFields
+            val all = autoFields + farmFields + moveFields + goldFields + redFields + routeFields + buffFields + shopFields
             for ((k, et) in inputs) {
                 val f = all.first { it.key == k }
                 val raw = et.text.toString().trim()
@@ -310,6 +317,7 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_goldRandomOn", goldRandomOn.isChecked)
             e.putBoolean("cfg_redOn", redOn.isChecked)
             e.putBoolean("cfg_routeOn", routeOn.isChecked)
+            e.putBoolean("cfg_routeRandomOn", routeRandomOn.isChecked)
             e.putBoolean("cfg_redRandomOn", redRandomOn.isChecked)
             e.putBoolean("cfg_impOn", impOn.isChecked)
             e.putBoolean("cfg_angelOn", angelOn.isChecked)
