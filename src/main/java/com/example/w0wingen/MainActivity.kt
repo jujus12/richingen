@@ -128,6 +128,29 @@ class MainActivity : Activity() {
         sub.setPadding(0, 0, 0, dp(14))
         col.addView(sub)
 
+        val profCard = card(col, "Profiller")
+        val profHint = TextView(this)
+        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Oto sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
+        profHint.textSize = 11f
+        profHint.setTextColor(DIM)
+        profCard.addView(profHint)
+        profName = EditText(this)
+        profName.hint = "Profil adı (örn. Boss gecesi)"
+        profName.setTextColor(Color.WHITE)
+        profName.setHintTextColor(DIM)
+        profName.setSingleLine(true)
+        profCard.addView(profName, lp(dp(8)))
+        val ps = button("Mevcut ayarları profil olarak kaydet", true)
+        ps.setOnClickListener {
+            writeSettings()
+            val n = TimerService.saveProfile(prefs(), profName.text.toString())
+            if (n.isEmpty()) {
+                Toast.makeText(this, "Önce bir ad yaz", Toast.LENGTH_SHORT).show()
+            } else {
+                profName.setText("")
+                Toast.makeText(this, "Profil kaydedildi: " + n, Toast.LENGTH_SHORT).show()
+                renderProfiles()
+
         val setup = card(col, "Kurulum")
         val steps = TextView(this)
         steps.textSize = 13f
@@ -249,30 +272,7 @@ class MainActivity : Activity() {
             writeSettings()
             Toast.makeText(this, "Kaydedildi (oyundaki 'Ayar' menüsünü yeniden aç)", Toast.LENGTH_SHORT).show()
         }
-        col.addView(save, lp(dp(6)))
 
-        val profCard = card(col, "Profiller")
-        val profHint = TextView(this)
-        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Oto sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
-        profHint.textSize = 11f
-        profHint.setTextColor(DIM)
-        profCard.addView(profHint)
-        profName = EditText(this)
-        profName.hint = "Profil adı (örn. Boss gecesi)"
-        profName.setTextColor(Color.WHITE)
-        profName.setHintTextColor(DIM)
-        profName.setSingleLine(true)
-        profCard.addView(profName, lp(dp(8)))
-        val ps = button("Mevcut ayarları profil olarak kaydet", true)
-        ps.setOnClickListener {
-            writeSettings()
-            val n = TimerService.saveProfile(prefs(), profName.text.toString())
-            if (n.isEmpty()) {
-                Toast.makeText(this, "Önce bir ad yaz", Toast.LENGTH_SHORT).show()
-            } else {
-                profName.setText("")
-                Toast.makeText(this, "Profil kaydedildi: " + n, Toast.LENGTH_SHORT).show()
-                renderProfiles()
             }
         }
         profCard.addView(ps, lp(dp(8)))
@@ -284,7 +284,16 @@ class MainActivity : Activity() {
         val sv = ScrollView(this)
         sv.setBackgroundColor(BG)
         sv.addView(col)
-        setContentView(sv)
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setBackgroundColor(BG)
+        root.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        val bar = LinearLayout(this)
+        bar.setBackgroundColor(CARD)
+        bar.setPadding(dp(16), dp(8), dp(16), dp(8))
+        bar.addView(save, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        setContentView(root)
     }
 
     private fun writeSettings() {
@@ -373,20 +382,36 @@ class MainActivity : Activity() {
         return l
     }
 
+    /** Katlanır kart: başlığa dokununca açılır/kapanır, durum hatırlanır. Dönen düzene içerik eklenir. */
     private fun card(parent: LinearLayout, heading: String): LinearLayout {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
         c.background = rounded(CARD, 16)
-        c.setPadding(dp(14), dp(12), dp(14), dp(14))
+        c.setPadding(dp(14), dp(12), dp(14), dp(12))
         val h = TextView(this)
-        h.text = heading
         h.textSize = 16f
         h.typeface = Typeface.DEFAULT_BOLD
         h.setTextColor(ACCENT)
-        h.setPadding(0, 0, 0, dp(6))
+        h.setPadding(0, dp(2), 0, dp(2))
+        val body = LinearLayout(this)
+        body.orientation = LinearLayout.VERTICAL
+        body.setPadding(0, dp(8), 0, dp(2))
+        val key = "card_open_" + heading
+        var open = prefs().getBoolean(key, heading == "Profiller")
+        fun apply() {
+            h.text = (if (open) "▾  " else "▸  ") + heading
+            body.visibility = if (open) android.view.View.VISIBLE else android.view.View.GONE
+        }
+        apply()
+        h.setOnClickListener {
+            open = !open
+            prefs().edit().putBoolean(key, open).apply()
+            apply()
+        }
         c.addView(h)
-        parent.addView(c, lp(dp(12)))
-        return c
+        c.addView(body)
+        parent.addView(c, lp(dp(10)))
+        return body
     }
 
     private fun button(text: String, primary: Boolean): Button {

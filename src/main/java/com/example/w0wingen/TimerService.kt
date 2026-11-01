@@ -2464,6 +2464,23 @@ class TimerService : AccessibilityService() {
         tabAuto.orientation = LinearLayout.VERTICAL
         val tabTools = LinearLayout(this)
         tabTools.orientation = LinearLayout.VERTICAL
+        val tabMark = LinearLayout(this)
+        tabMark.orientation = LinearLayout.VERTICAL
+        val tabMaint = LinearLayout(this)
+        tabMaint.orientation = LinearLayout.VERTICAL
+        fun sect(parent: LinearLayout, title: String): LinearLayout {
+            val box = LinearLayout(this)
+            box.orientation = LinearLayout.VERTICAL
+            val lab = TextView(this)
+            lab.text = title
+            lab.textSize = 11f
+            lab.setTextColor(TEXT_DIM)
+            lab.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            lab.setPadding(0, dp(10), 0, dp(2))
+            box.addView(lab)
+            parent.addView(box)
+            return box
+        }
         val bw = mkBtn("📋  Bosslar penceresi") { toggleBossWin() }
         bw.textSize = 13f
         val bwlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36))
@@ -2481,13 +2498,13 @@ class TimerService : AccessibilityService() {
         tabBoss.addView(sv, slp)
 
         // açık/kapalı düğmeleri, gruplanmış
-        fun togGroup(title: String, keys: List<String>) {
+        fun togGroup(parent: LinearLayout, title: String, keys: List<String>) {
             val lab = TextView(this)
             lab.text = title
             lab.textSize = 11f
             lab.setTextColor(TEXT_DIM)
             lab.setPadding(0, dp(8), 0, dp(2))
-            tabAuto.addView(lab)
+            parent.addView(lab)
             for (chunk in keys.chunked(3)) {
                 val row = LinearLayout(this)
                 row.orientation = LinearLayout.HORIZONTAL
@@ -2505,7 +2522,7 @@ class TimerService : AccessibilityService() {
                 for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(38), 1f))
                 val rl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 rl.topMargin = dp(4)
-                tabAuto.addView(row, rl)
+                parent.addView(row, rl)
             }
         }
         val pb = mkBtn("") { cycleProfile() }
@@ -2525,9 +2542,15 @@ class TimerService : AccessibilityService() {
         pbl.topMargin = dp(6)
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
-        togGroup("MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "randomOn"))
-        togGroup("BAKIM", listOf("potOn", "recycleOn", "recycleEachKill", "buffOn"))
-        togGroup("SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
+        togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "randomOn"))
+        togGroup(tabMaint, "BAKIM", listOf("potOn", "recycleOn", "recycleEachKill", "buffOn"))
+        togGroup(tabAuto, "SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
+
+        val boxMaintBtns = sect(tabMaint, "ELLE")
+        val boxGold = sect(tabMark, "GOLDEN")
+        val boxRed = sect(tabMark, "RED BOSS")
+        val boxRoute = sect(tabMark, "ROTA VE CANLI BOSS")
+        val boxAutoBtns = sect(tabAuto, "ELLE")
 
         // araçlar (varsayılan gizli)
         val tb = LinearLayout(this)
@@ -2542,7 +2565,6 @@ class TimerService : AccessibilityService() {
         )
         val r2 = btnRow(
             listOf<Pair<String, () -> Unit>>(
-                "Farma git" to { runManual { doFarm() } },
                 "Pot kontrol" to { runManual { doPots() } },
                 "Recycle" to { runManual { doRecycle() } }
             ),
@@ -2551,20 +2573,24 @@ class TimerService : AccessibilityService() {
         val rlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         rlp.topMargin = dp(6)
         tb.addView(r1, rlp)
-        tb.addView(r2, rlp)
+        boxMaintBtns.addView(r2, rlp)
+        boxAutoBtns.addView(
+            btnRow(listOf<Pair<String, () -> Unit>>("Farma git" to { runManual { doFarm() } }), dp(36)),
+            rlp
+        )
         val r3 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "Golden işaretle" to { runManual { goldMark() } },
-                "Golden listesi" to { toggleGoldWin() },
-                "Kronometre" to { toggleStopwatch() }
+                "Golden listesi" to { toggleGoldWin() }
             ),
             dp(36)
         )
-        tb.addView(r3, rlp)
+        boxGold.addView(r3, rlp)
         val r4 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "⏱ Zaman kaydet" to { addStamp() },
-                "Kayıt listesi" to { toggleStampWin() }
+                "Kayıt listesi" to { toggleStampWin() },
+                "Kronometre" to { toggleStopwatch() }
             ),
             dp(36)
         )
@@ -2576,7 +2602,7 @@ class TimerService : AccessibilityService() {
             ),
             dp(36)
         )
-        tb.addView(r5, rlp)
+        boxRed.addView(r5, rlp)
         val r6 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "Canlı boss kaydet" to { runManual { doSaveAlive() } },
@@ -2585,7 +2611,7 @@ class TimerService : AccessibilityService() {
             ),
             dp(36)
         )
-        tb.addView(r6, rlp)
+        boxRoute.addView(r6, rlp)
         val rr = LinearLayout(this)
         rr.orientation = LinearLayout.HORIZONTAL
         rr.gravity = Gravity.CENTER_VERTICAL
@@ -2603,7 +2629,7 @@ class TimerService : AccessibilityService() {
         rr.addView(mkBtn("−") { changeRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         rr.addView(rv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         rr.addView(mkBtn("+") { changeRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-        tb.addView(rr, rlp)
+        boxAutoBtns.addView(rr, rlp)
         val gq = LinearLayout(this)
         gq.orientation = LinearLayout.HORIZONTAL
         gq.gravity = Gravity.CENTER_VERTICAL
@@ -2621,7 +2647,7 @@ class TimerService : AccessibilityService() {
         gq.addView(mkBtn("−") { changeGoldRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         gq.addView(gqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         gq.addView(mkBtn("+") { changeGoldRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-        tb.addView(gq, rlp)
+        boxGold.addView(gq, rlp)
         val rq = LinearLayout(this)
         rq.orientation = LinearLayout.HORIZONTAL
         rq.gravity = Gravity.CENTER_VERTICAL
@@ -2639,7 +2665,7 @@ class TimerService : AccessibilityService() {
         rq.addView(mkBtn("−") { changeRedRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         rq.addView(rqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         rq.addView(mkBtn("+") { changeRedRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-        tb.addView(rq, rlp)
+        boxRed.addView(rq, rlp)
         val gr = LinearLayout(this)
         gr.orientation = LinearLayout.HORIZONTAL
         gr.gravity = Gravity.CENTER_VERTICAL
@@ -2657,7 +2683,7 @@ class TimerService : AccessibilityService() {
         gr.addView(mkBtn("−") { changeGap(-0.25f) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         gr.addView(gv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         gr.addView(mkBtn("+") { changeGap(0.25f) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-        tb.addView(gr, rlp)
+        boxMaintBtns.addView(gr, rlp)
         toolsBox = tb
         // panel boyutu ve saydamlık
         val sr = LinearLayout(this)
@@ -2699,8 +2725,8 @@ class TimerService : AccessibilityService() {
         tabTools.addView(tb)
 
         // sekmeler
-        val tabNames = listOf("Bosslar", "Oto", "Araçlar")
-        val tabViews = listOf<View>(tabBoss, tabAuto, tabTools)
+        val tabNames = listOf("Boss", "Oto", "İşaret", "Bakım", "Araç")
+        val tabViews = listOf<View>(tabBoss, tabAuto, tabMark, tabMaint, tabTools)
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
         tabBar.orientation = LinearLayout.HORIZONTAL
@@ -2716,7 +2742,7 @@ class TimerService : AccessibilityService() {
         for ((k, n) in tabNames.withIndex()) {
             val t = TextView(this)
             t.text = n
-            t.textSize = 13f
+            t.textSize = 12f
             t.gravity = Gravity.CENTER
             t.typeface = android.graphics.Typeface.DEFAULT_BOLD
             t.setOnClickListener { showTab(k) }
@@ -2728,8 +2754,10 @@ class TimerService : AccessibilityService() {
         outer.addView(tabBar, tbl)
         outer.addView(tabBoss)
         outer.addView(tabAuto)
+        outer.addView(tabMark)
+        outer.addView(tabMaint)
         outer.addView(tabTools)
-        showTab(prefs().getInt("tab", 0).coerceIn(0, 2))
+        showTab(prefs().getInt("tab", 0).coerceIn(0, 4))
         outer.addView(mainRow, mainRowLp)
         outer.alpha = uiAlpha() / 100f
         updateSizeBtns()
