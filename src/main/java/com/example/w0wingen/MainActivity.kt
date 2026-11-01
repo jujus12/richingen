@@ -251,7 +251,7 @@ class MainActivity : Activity() {
         for (f in moveFields) addField(move, f)
 
         val rt = card(col, "Rota")
-        routeOn = sw(rt, "Rota açık: duraklarda sırayla gez, canlı bossları kes (açıkken golden/red/farm çalışmaz; oyunda Araçlar > Durak ekle)", "cfg_routeOn", false)
+        routeOn = sw(rt, "Rota açık: rotadaki haritaları sırayla gez, her haritanın tüm wire'larında canlı bossları kes (açıkken golden/red/farm çalışmaz; rotayı oyunda İşaret sekmesi > Rota listesi'nden kur)", "cfg_routeOn", false)
 
         val gold = card(col, "Golden canavarlar")
         goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farm yerine; ikisini birlikte açma)", "cfg_goldOn", false)

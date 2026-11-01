@@ -1797,6 +1797,19 @@ class TimerService : AccessibilityService() {
             }
         }
         if (on("redOn") && !hasPt("redLink")) need.add("redLink")
+        if (on("routeOn")) {
+            for (rm in routeSnapshot()) {
+                val l = "link_" + rm
+                if (!hasPt(l) && !need.contains(l)) need.add(l)
+                if (mapInfo(rm).wires > 1) {
+                    for (w in 1..mapInfo(rm).wires) {
+                        val n = "wire" + w
+                        if (!hasPt(n) && !need.contains(n)) need.add(n)
+                    }
+                    if (!hasPt("switchBtn") && !need.contains("switchBtn")) need.add("switchBtn")
+                }
+            }
+        }
         val maps = ArrayList<String>()
         for (e in snapshot()) maps.add(e.map)
         for (m in maps) {
@@ -2606,7 +2619,6 @@ class TimerService : AccessibilityService() {
         val r6 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "Canlı boss kaydet" to { runManual { doSaveAlive() } },
-                "Durak ekle" to { runManual { addStop() } },
                 "Rota listesi" to { toggleRouteWin() }
             ),
             dp(36)
@@ -4144,47 +4156,35 @@ class TimerService : AccessibilityService() {
 
     // ------------------------------------------------------------------ rota (duraklar sırayla gezilir, canlı bosslar kesilir) ve canlı boss kaydı
 
-    private class Stop(val id: Long, val map: String, val wire: Int, val px: Float, val py: Float)
-
-    private val route = ArrayList<Stop>()
+    /** Rota: harita listesinden seçilen haritalar sırayla gezilir; her haritanın her wire'ında canlı bosslar kesilir. */
+    private val route = ArrayList<String>()
     private val routeSkip = ArrayList<Pair<PointF, Long>>()
     private var routeKills = 0
     private var routeWinOpen = false
     @Volatile private var routeIdx = 0
+    @Volatile private var routeWire = 1
     @Volatile private var routeAt = false
     @Volatile private var lastBuffChk = 0L
 
     private fun loadRoute() {
         synchronized(lock) {
             route.clear()
-            try {
-                val a = JSONArray(prefs().getString("route", "[]") ?: "[]")
-                for (i in 0 until a.length()) {
-                    val o = a.getJSONObject(i)
-                    route.add(Stop(o.getLong("id"), o.getString("map"), o.getInt("wire"), o.getDouble("px").toFloat(), o.getDouble("py").toFloat()))
-                }
-            } catch (e: Exception) {
-            }
+            for (l in (prefs().getString("routeMaps", "") ?: "").split("\n")) if (l.isNotBlank()) route.add(l.trim())
         }
     }
 
     private fun saveRoute() {
-        val a = JSONArray()
-        synchronized(lock) {
-            for (t in route) {
-                val o = JSONObject()
-                o.put("id", t.id)
-                o.put("map", t.map)
-                o.put("wire", t.wire)
-                o.put("px", t.px.toDouble())
-                o.put("py", t.py.toDouble())
-                a.put(o)
-            }
-        }
-        prefs().edit().putString("route", a.toString()).apply()
+        val t = synchronized(lock) { route.joinToString("\n") }
+        prefs().edit().putString("routeMaps", t).apply()
     }
 
-    private fun routeSnapshot(): List<Stop> = synchronized(lock) { ArrayList(route) }
+    private fun routeSnapshot(): List<String> = synchronized(lock) { ArrayList(route) }
+
+    private fun resetRoute() {
+        routeIdx = 0
+        routeWire = 1
+        routeAt = false
+    }
 
     /** Karakterin şu anki harita, wire ve haritadaki noktasını okur. */
     private fun readHere(): Triple<String, Int, PointF> {
@@ -4198,20 +4198,6 @@ class TimerService : AccessibilityService() {
         return Triple(info.first, info.second, PointF(me.x / mb.width, me.y / mb.height))
     }
 
-    /** Rotaya durak ekler: bulunduğun harita, wire ve nokta kaydedilir. */
-    private fun addStop() {
-        say("Durak okunuyor...")
-        val h = readHere()
-        val n: Int
-        synchronized(lock) {
-            route.add(Stop(System.currentTimeMillis(), h.first, h.second, h.third.x, h.third.y))
-            n = route.size
-        }
-        saveRoute()
-        say("Durak " + n + " eklendi: " + shortMap(h.first) + " W" + h.second)
-        toast("Rota durağı " + n + ": " + h.first + " W" + h.second)
-    }
-
     /** Boss yaşıyorken (mezar sayacı yokken) kaydeder: hemen vakti gelmiş sayılır, bot gidip keser ve sayacı kaydeder. */
     private fun doSaveAlive() {
         say("Canlı boss okunuyor...")
@@ -4221,7 +4207,7 @@ class TimerService : AccessibilityService() {
         say("Canlı boss kaydedildi: " + title(e) + " (vakti geldi sayılır)")
     }
 
-    /** Rotada bir tur: sıradaki durağa gider, orada canlı boss ikonu kalmayana kadar keser, sonra sonraki durağa geçer. */
+    /** Rotada bir adım: sıradaki haritanın sıradaki wire'ına gider (PM bağlantısı + wire), canlı boss kalmayana kadar keser, sonra sonraki wire/haritaya geçer. */
     private fun runRoute() {
         goldHere = false
         redHere = false
@@ -4229,21 +4215,26 @@ class TimerService : AccessibilityService() {
             setAuto(false)
             farming = false
         }
-        val stops = routeSnapshot()
-        if (stops.isEmpty()) return
-        val i = routeIdx % stops.size
-        val st = stops[i]
+        val maps = routeSnapshot()
+        if (maps.isEmpty()) return
+        if (routeIdx >= maps.size) resetRoute()
+        val name = maps[routeIdx]
+        val wires = mapInfo(name).wires
+        if (routeWire > wires) routeWire = 1
         if (!routeAt) {
-            say("Rota " + (i + 1) + "/" + stops.size + ": " + shortMap(st.map) + " W" + st.wire)
-            ensureLocation(st.map, st.wire)
-            approach(ensureMap(), st.px, st.py, "Durak " + (i + 1), cfgI("radius", 200).toFloat(), on("randomOn"))
+            say("Rota " + (routeIdx + 1) + "/" + maps.size + ": " + shortMap(name) + (if (wires > 1) " · Wire " + routeWire else ""))
+            ensureLocation(name, routeWire)
             routeAt = true
         }
         if (routeKill()) {
             fails = 0
         } else {
-            routeIdx = (i + 1) % stops.size
             routeAt = false
+            routeWire++
+            if (routeWire > wires) {
+                routeWire = 1
+                routeIdx = (routeIdx + 1) % maps.size
+            }
         }
     }
 
@@ -4379,7 +4370,7 @@ class TimerService : AccessibilityService() {
         head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
         val t = TextView(this)
-        t.text = "Rota (" + list.size + " durak)"
+        t.text = "Rota (" + list.size + " harita)"
         t.textSize = 16f
         t.setTextColor(Color.WHITE)
         t.typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -4387,8 +4378,7 @@ class TimerService : AccessibilityService() {
         head.addView(mkBtn("Temizle", BAD) {
             synchronized(lock) { route.clear() }
             saveRoute()
-            routeIdx = 0
-            routeAt = false
+            resetRoute()
             closeBossWin()
             toggleRouteWin()
         }, LinearLayout.LayoutParams(dp(90), dp(36)))
@@ -4396,7 +4386,7 @@ class TimerService : AccessibilityService() {
         head.addView(mkBtn("Kapat ✕") { closeBossWin() }, LinearLayout.LayoutParams(dp(90), dp(36)))
         outer.addView(head)
         val hint = TextView(this)
-        hint.text = "Rota açıkken bot duraklarda sırayla gezer, haritadaki canlı bossları keser. Durak eklemek için karakteri yere götürüp Araçlar'da 'Durak ekle'ye bas. Silmek için ✕'e uzun bas."
+        hint.text = "Aşağıdaki harita listesinden dokunarak rotaya ekle. Rota açıkken bot haritaları sırayla PM bağlantısından açar, her haritanın tüm wire'larını gezer, canlı bossları keser. Satıra dokun: bir yukarı al. ✕'e uzun bas: sil."
         hint.textSize = 11f
         hint.setTextColor(TEXT_DIM)
         hint.setPadding(0, dp(4), 0, dp(4))
@@ -4406,13 +4396,23 @@ class TimerService : AccessibilityService() {
         val sv = ScrollView(this)
         sv.addView(col)
         outer.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        fun lab(text: String) {
+            val l = TextView(this)
+            l.text = text
+            l.textSize = 11f
+            l.setTextColor(TEXT_DIM)
+            l.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            l.setPadding(0, dp(10), 0, dp(2))
+            col.addView(l)
+        }
+        lab("ROTA SIRASI")
         if (list.isEmpty()) {
             val e0 = TextView(this)
-            e0.text = "Henüz durak yok."
+            e0.text = "Rota boş. Aşağıdan harita ekle."
             e0.setTextColor(TEXT_DIM)
             col.addView(e0)
         }
-        for ((i, st) in list.withIndex()) {
+        for ((i, nm) in list.withIndex()) {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
@@ -4424,20 +4424,32 @@ class TimerService : AccessibilityService() {
             n.setTextColor(TEXT_DIM)
             row.addView(n, LinearLayout.LayoutParams(dp(40), LinearLayout.LayoutParams.WRAP_CONTENT))
             val tt = TextView(this)
-            tt.text = shortMap(st.map) + " · Wire " + st.wire
-            tt.textSize = 15f
+            tt.text = nm + "  ·  " + mapInfo(nm).wires + " wire"
+            tt.textSize = 14f
             tt.typeface = android.graphics.Typeface.DEFAULT_BOLD
             tt.setTextColor(Color.WHITE)
             row.addView(tt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.setOnClickListener {
+                if (i > 0) {
+                    synchronized(lock) {
+                        val x = route.removeAt(i)
+                        route.add(i - 1, x)
+                    }
+                    saveRoute()
+                    resetRoute()
+                    closeBossWin()
+                    toggleRouteWin()
+                }
+            }
             val del = TextView(this)
             del.text = "✕"
             del.textSize = 16f
             del.setTextColor(TEXT_DIM)
             del.setPadding(dp(14), dp(6), dp(6), dp(6))
             del.setOnLongClickListener {
-                synchronized(lock) { route.remove(st) }
+                synchronized(lock) { route.removeAt(i) }
                 saveRoute()
-                routeAt = false
+                resetRoute()
                 closeBossWin()
                 toggleRouteWin()
                 true
@@ -4445,6 +4457,28 @@ class TimerService : AccessibilityService() {
             row.addView(del)
             val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             lp.topMargin = dp(6)
+            col.addView(row, lp)
+        }
+        lab("HARİTALAR (dokun: rotaya ekle)")
+        for (m in maps()) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(0xFF11141B.toInt(), 10)
+            row.setPadding(dp(12), dp(8), dp(12), dp(8))
+            val tt = TextView(this)
+            tt.text = "+  " + m.name + "  ·  " + m.wires + " wire"
+            tt.textSize = 13f
+            tt.setTextColor(Color.WHITE)
+            row.addView(tt)
+            row.setOnClickListener {
+                synchronized(lock) { route.add(m.name) }
+                saveRoute()
+                closeBossWin()
+                toggleRouteWin()
+            }
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.topMargin = dp(4)
             col.addView(row, lp)
         }
         val w = minOf(dp(440), (screenW * 0.6f).toInt())
