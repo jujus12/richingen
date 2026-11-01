@@ -208,6 +208,11 @@ class MainActivity : Activity() {
                 if (!mapsRaw.lowercase().contains(n.lowercase())) mapsRaw = mapsRaw.trimEnd() + "\n" + n + ";3"
             }
         }
+        if (!prefs().getBoolean("superbAdded", false)) {
+            for (n in listOf("Superb Realm 2", "Superb Realm 3")) {
+                if (!mapsRaw.lowercase().contains(n.lowercase())) mapsRaw = mapsRaw.trimEnd() + "\n" + n + ";1"
+            }
+        }
         if (!mapsRaw.lowercase().contains("swamp of peace")) mapsRaw = mapsRaw.trimEnd() + "\nSwamp of Peace;3"
         mapsEdit.setText(mapsRaw)
         mapsEdit.setTextColor(Color.WHITE)
