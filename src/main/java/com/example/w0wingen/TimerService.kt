@@ -4066,6 +4066,10 @@ class TimerService : AccessibilityService() {
             }
             gameAuto = false
             setAuto(true)
+            if (on("angelOn") && hasPt("angel")) {
+                tapPoint("angel")
+                pause(300)
+            }
         }
         say(label + "\nOto atak açık, red boss bekleniyor")
         fightMaint()
@@ -4498,6 +4502,10 @@ class TimerService : AccessibilityService() {
             }
             gameAuto = false
             setAuto(true)
+            if (on("angelOn") && hasPt("angel")) {
+                tapPoint("angel")
+                pause(300)
+            }
         }
         say(label + "\nOto atak açık, boss bekleniyor")
         fightMaint()
