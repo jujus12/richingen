@@ -34,7 +34,9 @@ class MainActivity : Activity() {
 
     private val farmFields = listOf(
         Field("farmWire", "Farm wire'ı", "Farma giderken önce bu wire'a geçilir", "3"),
-        Field("farmWait", "Farm konumuna varış bekleme", "Bağlantıya dokunduktan bu kadar sn sonra oto atak ve kalkan (sn)", "10")
+        Field("farmWait", "Farm konumuna varış bekleme", "Bağlantıya dokunduktan bu kadar sn sonra oto atak ve kalkan (sn)", "10"),
+        Field("idleFarmMin", "Boşta farm: kaç dk kesim yoksa", "Otomasyon bu kadar dakika hiçbir şey kesmezse PM'deki farm konumuna gidip farm yapılır (dk, 0 = kapalı)", "10"),
+        Field("idleFarmStay", "Boşta farm: kaç dk kalsın", "Farma gidince en az bu kadar dakika orada kalınır, sonra rota/golden/red tekrar denenir (dk). Süresi gelen boss yine öne geçer", "10")
     )
 
     private val moveFields = listOf(
@@ -96,6 +98,7 @@ class MainActivity : Activity() {
     private lateinit var redOn: Switch
     private lateinit var routeOn: Switch
     private lateinit var routeRandomOn: Switch
+    private lateinit var idleFarmOn: Switch
     private lateinit var redRandomOn: Switch
     private lateinit var impOn: Switch
     private lateinit var angelOn: Switch
@@ -256,6 +259,7 @@ class MainActivity : Activity() {
 
         val farm = card(col, "Farm")
         farmOn = sw(farm, "Boss yokken farm konumuna git", "cfg_farmOn", true)
+        idleFarmOn = sw(farm, "Boşta farm: belirlenen süre hiçbir şey kesilmezse farm konumuna git (rota/golden/red açıkken de çalışır)", "cfg_idleFarmOn", false)
         for (f in farmFields) addField(farm, f)
         impOn = sw(farm, "Farmda Imp düğmesine bas", "cfg_impOn", true)
         angelOn = sw(farm, "Boss keserken Angel düğmesine bas", "cfg_angelOn", true)
@@ -327,6 +331,7 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_redOn", redOn.isChecked)
             e.putBoolean("cfg_routeOn", routeOn.isChecked)
             e.putBoolean("cfg_routeRandomOn", routeRandomOn.isChecked)
+            e.putBoolean("cfg_idleFarmOn", idleFarmOn.isChecked)
             e.putBoolean("cfg_redRandomOn", redRandomOn.isChecked)
             e.putBoolean("cfg_impOn", impOn.isChecked)
             e.putBoolean("cfg_angelOn", angelOn.isChecked)

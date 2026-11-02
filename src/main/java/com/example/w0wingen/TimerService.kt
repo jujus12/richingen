@@ -205,7 +205,8 @@ class TimerService : AccessibilityService() {
             Triple("redOn", "Red boss", false),
             Triple("redRandomOn", "R·Rnd", false),
             Triple("routeOn", "Rota", false),
-            Triple("routeRandomOn", "Rota Rnd", false)
+            Triple("routeRandomOn", "Rota Rnd", false),
+            Triple("idleFarmOn", "Boşta farm", false)
         )
 
         /** Temalar: vurgu, panel, kart, eksik, ayar ekranı zemini, ayar ekranı girişi. */
@@ -1902,7 +1903,7 @@ class TimerService : AccessibilityService() {
 
     private fun missingForAuto(): List<String> {
         val need = ArrayList<String>()
-        if (on("farmOn")) for (n in listOf("chat", "pmTab", "farmLink", "autoAtk", "shield")) if (!hasPt(n)) need.add(n)
+        if (on("farmOn") || on("idleFarmOn")) for (n in listOf("chat", "pmTab", "farmLink", "autoAtk", "shield")) if (!hasPt(n)) need.add(n)
         if (on("farmOn") && on("impOn") && !hasPt("imp")) need.add("imp")
         if (on("angelOn") && !hasPt("angel")) need.add("angel")
         for (n in listOf("chat", "pmTab", "autoAtk")) if (!hasPt(n) && !need.contains(n)) need.add(n)
@@ -1974,6 +1975,10 @@ class TimerService : AccessibilityService() {
         return best
     }
 
+    @Volatile private var lastKillAt = 0L
+    @Volatile private var lastKillTotal = 0
+    @Volatile private var idleFarmUntil = 0L
+
     private fun autoLoop() {
         gameAuto = false
         farming = false
@@ -1983,6 +1988,9 @@ class TimerService : AccessibilityService() {
         say("Otomasyon açık")
         startedAt = System.currentTimeMillis()
         deathCnt.clear()
+        lastKillAt = System.currentTimeMillis()
+        lastKillTotal = kills + goldKills + redKills + routeKills
+        idleFarmUntil = 0L
         ev("Otomasyon başladı", true, 3)
         buffCheck()
         potCheckNow()
@@ -2003,6 +2011,27 @@ class TimerService : AccessibilityService() {
                 if (on("buffOn") && now - lastBuffChk >= cfgI("buffWatchSec", 45) * 1000L) {
                     buffCheck()
                     continue
+                }
+                if (on("idleFarmOn")) {
+                    val total = kills + goldKills + redKills + routeKills
+                    if (total != lastKillTotal) {
+                        lastKillTotal = total
+                        lastKillAt = now
+                    }
+                    val minutes = cfgI("idleFarmMin", 10)
+                    if (now < idleFarmUntil) {
+                        if (!farming) doFarm()
+                        idleTick()
+                        continue
+                    }
+                    if (minutes > 0 && now - lastKillAt >= minutes * 60000L) {
+                        ev(minutes.toString() + " dk hiçbir şey kesilmedi, farma gidiliyor", true, 3)
+                        say(minutes.toString() + " dk kesim yok, farma gidiliyor")
+                        doFarm()
+                        idleFarmUntil = System.currentTimeMillis() + cfgI("idleFarmStay", 10) * 60000L
+                        lastKillAt = System.currentTimeMillis()
+                        continue
+                    }
                 }
                 if (on("routeOn") && routeSnapshot().isNotEmpty()) {
                     runRoute()
@@ -2690,7 +2719,7 @@ class TimerService : AccessibilityService() {
         pbl.topMargin = dp(6)
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
-        togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "routeRandomOn", "randomOn"))
+        togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "routeRandomOn", "idleFarmOn", "randomOn"))
         togGroup(tabMaint, "BAKIM", listOf("potOn", "recycleOn", "buffOn"))
         togGroup(tabAuto, "SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
