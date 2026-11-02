@@ -1628,134 +1628,17 @@ class TimerService : AccessibilityService() {
     }
 
     /** Oyundaki oto atak düğmesini istenen duruma getirir (düğme aç/kapa olduğu için durumu takip eder). */
-    // ---- oto atak durumu: düğme bölgesinin rengi "açık" ve "kapalı" için öğretilirse durum ekrandan okunur
-    private fun autoVec(b: Bitmap): FloatArray? {
-        val p = pt("autoAtk")
-        val s = b.width / 2560f
-        val half = maxOf(8, Math.round(40 * s))
-        val cx = (p.first * b.width).toInt()
-        val cy = (p.second * b.height).toInt()
-        val x0 = maxOf(0, cx - half)
-        val x1 = minOf(b.width - 1, cx + half)
-        val y0 = maxOf(0, cy - half)
-        val y1 = minOf(b.height - 1, cy + half)
-        if (x1 <= x0 || y1 <= y0) return null
-        var sr = 0L
-        var sg = 0L
-        var sb = 0L
-        var ss = 0L
-        var n = 0
-        for (y in y0..y1 step 2) for (x in x0..x1 step 2) {
-            val c = b.getPixel(x, y)
-            val r = Color.red(c)
-            val g = Color.green(c)
-            val bl = Color.blue(c)
-            sr += r
-            sg += g
-            sb += bl
-            ss += maxOf(r, maxOf(g, bl)) - minOf(r, minOf(g, bl))
-            n++
-        }
-        if (n == 0) return null
-        return floatArrayOf(sr.toFloat() / n, sg.toFloat() / n, sb.toFloat() / n, ss.toFloat() / n)
-    }
+    @Volatile private var lastFightEnd = 0L
 
-    private fun vdist(a: FloatArray, b: FloatArray): Float {
-        var t = 0f
-        for (i in a.indices) t += (a[i] - b[i]) * (a[i] - b[i])
-        return Math.sqrt(t.toDouble()).toFloat()
-    }
-
-    private fun autoSig(key: String): FloatArray? {
-        val v = (prefs().getString(key, "") ?: "").split(",").mapNotNull { it.toFloatOrNull() }
-        return if (v.size == 4) v.toFloatArray() else null
-    }
-
-    /** Oto atak düğmesi açık mı: true/false, öğrenilmemişse ya da emin değilse null. */
-    private fun autoState(b: Bitmap): Boolean? {
-        val on = autoSig("autoSigOn") ?: return null
-        val off = autoSig("autoSigOff") ?: return null
-        val gapv = vdist(on, off)
-        if (gapv < 8f) return null
-        val v = autoVec(b) ?: return null
-        val dOn = vdist(v, on)
-        val dOff = vdist(v, off)
-        if (minOf(dOn, dOff) > 0.7f * gapv) return null
-        return dOn < dOff
-    }
-
-    private fun autoCalibrated(): Boolean {
-        val on = autoSig("autoSigOn") ?: return false
-        val off = autoSig("autoSigOff") ?: return false
-        return vdist(on, off) >= 8f
-    }
-
-    private fun learnAuto(on: Boolean) {
-        closeMapIfOpen()
-        val b = shot() ?: fail("Ekran görüntüsü alınamadı")
-        val v = autoVec(b) ?: fail("Oto atak düğmesi okunamadı (autoAtk noktası işaretli mi?)")
-        prefs().edit().putString(if (on) "autoSigOn" else "autoSigOff", v.joinToString(",")).apply()
-        val other = autoSig(if (on) "autoSigOff" else "autoSigOn")
-        val msg = if (other == null) "Kaydedildi. Şimdi diğer durumu da öğret."
-        else if (vdist(v, other) < 8f) "Dikkat: açık ve kapalı görünümü neredeyse aynı, doğrulama kullanılamaz. autoAtk noktasını düğmenin ortasına işaretle."
-        else "Oto atak doğrulaması hazır."
-        say("Oto atak " + (if (on) "AÇIK" else "KAPALI") + " imzası kaydedildi. " + msg)
-        toast(msg)
-    }
-
-    /** Savaş döngülerinde: oto atak sessizce kapanmışsa tekrar açar (en çok 8 sn'de bir bakar). */
-    @Volatile private var lastKeepAuto = 0L
-
-    private fun keepAuto(b: Bitmap) {
-        val now = System.currentTimeMillis()
-        if (now - lastKeepAuto < 8000L) return
-        lastKeepAuto = now
-        if (!autoCalibrated() || mapOpen(b)) return
-        if (autoState(b) == false) {
-            tapPoint("autoAtk")
-            gameAuto = true
-            ev("Oto atak kapanmıştı, tekrar açıldı")
-            pause(500)
-        }
-    }
+    /** Az önceki kesimden hemen sonra yeni hedef zaten üstümüzdeyse oto atak sürüyordur; düğmeye basmak onu kapatırdı. */
+    private fun stillOnTarget(bd: Float): Boolean =
+        gameAuto && bd < Float.MAX_VALUE / 2 && bd <= cfgI("arrive", 45) * 1.5f && System.currentTimeMillis() - lastFightEnd < 30000L
 
     private fun setAuto(want: Boolean) {
-        if (autoCalibrated()) {
-            var legacy = false
-            var ok = false
-            for (attempt in 0 until 3) {
-                val b = shot()
-                if (b == null) {
-                    legacy = true
-                    break
-                }
-                if (mapOpen(b)) {
-                    tapPoint("closeMap")
-                    pause(600)
-                    continue
-                }
-                val st = autoState(b)
-                if (st == null) {
-                    legacy = true
-                    break
-                }
-                if (st == want) {
-                    gameAuto = want
-                    ok = true
-                    break
-                }
-                tapPoint("autoAtk")
-                pause(600)
-            }
-            if (!legacy) {
-                if (!ok) say("Oto atak durumu doğrulanamadı")
-                gameAuto = want
-                return
-            }
-        }
         // Her ışınlanma/wire değişiminde oyun oto atağı kapatır; açmak istediğimizde düğme her zaman kapalıdır.
         if (!want && !gameAuto) return
         tapPoint("autoAtk")
+        ev("Oto atak düğmesine basıldı (istenen: " + (if (want) "AÇIK" else "KAPALI") + ")")
         gameAuto = want
         pause(700)
     }
@@ -2334,7 +2217,6 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
-            keepAuto(b)
             if (miniAlive(b)) {
                 seen = true
                 dead = 0
@@ -2817,16 +2699,6 @@ class TimerService : AccessibilityService() {
         val boxRed = sect(tabMark, "RED BOSS")
         val boxRoute = sect(tabMark, "ROTA VE CANLI BOSS")
         val boxAutoBtns = sect(tabAuto, "ELLE")
-        boxAutoBtns.addView(
-            btnRow(
-                listOf<Pair<String, () -> Unit>>(
-                    "Auto AÇIK öğren" to { runManual { learnAuto(true) } },
-                    "Auto KAPALI öğren" to { runManual { learnAuto(false) } }
-                ),
-                dp(36)
-            ),
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(6) }
-        )
 
         // araçlar (varsayılan gizli)
         val tb = LinearLayout(this)
@@ -3705,14 +3577,18 @@ class TimerService : AccessibilityService() {
         }
         val tgt = best!!
         val label = "Golden (" + (if (bd < Float.MAX_VALUE / 2) bd.toInt().toString() + " px" else "?") + ")"
-        try {
-            approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
-        } catch (e: StepFail) {
-            goldSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
-            return true
+        if (stillOnTarget(bd)) {
+            say(label + "\nBossun üstündeyiz, oto atak sürüyor")
+        } else {
+            try {
+                approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
+            } catch (e: StepFail) {
+                goldSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
+                return true
+            }
+            gameAuto = false
+            setAuto(true)
         }
-        gameAuto = false
-        setAuto(true)
         say(label + "\nOto atak açık, golden bekleniyor")
         fightMaint()
         val t0 = System.currentTimeMillis()
@@ -3733,7 +3609,6 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
-            keepAuto(b)
             val now = System.currentTimeMillis()
             if (miniGoldAlive(b)) {
                 seen = true
@@ -3761,6 +3636,7 @@ class TimerService : AccessibilityService() {
                 return true
             }
         }
+        lastFightEnd = System.currentTimeMillis()
         goldKills++
         ev("Golden kesildi")
         say("Golden kesildi, sıradakine geçiliyor")
@@ -4179,14 +4055,18 @@ class TimerService : AccessibilityService() {
         }
         val tgt = best!!
         val label = "Red boss (" + (if (bd < Float.MAX_VALUE / 2) bd.toInt().toString() + " px" else "?") + ")"
-        try {
-            approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
-        } catch (e: StepFail) {
-            redSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
-            return true
+        if (stillOnTarget(bd)) {
+            say(label + "\nBossun üstündeyiz, oto atak sürüyor")
+        } else {
+            try {
+                approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
+            } catch (e: StepFail) {
+                redSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
+                return true
+            }
+            gameAuto = false
+            setAuto(true)
         }
-        gameAuto = false
-        setAuto(true)
         say(label + "\nOto atak açık, red boss bekleniyor")
         fightMaint()
         val t0 = System.currentTimeMillis()
@@ -4207,7 +4087,6 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
-            keepAuto(b)
             val now = System.currentTimeMillis()
             if (miniRedAlive(b)) {
                 seen = true
@@ -4235,6 +4114,7 @@ class TimerService : AccessibilityService() {
                 return true
             }
         }
+        lastFightEnd = System.currentTimeMillis()
         redKills++
         ev("Red boss kesildi")
         say("Red boss kesildi, sıradakine geçiliyor")
@@ -4607,14 +4487,18 @@ class TimerService : AccessibilityService() {
         }
         val tgt = best!!
         val label = "Boss (" + (if (bd < Float.MAX_VALUE / 2) bd.toInt().toString() + " px" else "?") + ")"
-        try {
-            approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
-        } catch (e: StepFail) {
-            routeSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
-            return true
+        if (stillOnTarget(bd)) {
+            say(label + "\nBossun üstündeyiz, oto atak sürüyor")
+        } else {
+            try {
+                approach(mb, tgt.x / screenW, tgt.y / screenH, label, 0f, false)
+            } catch (e: StepFail) {
+                routeSkip.add(Pair(tgt, System.currentTimeMillis() + 60000L))
+                return true
+            }
+            gameAuto = false
+            setAuto(true)
         }
-        gameAuto = false
-        setAuto(true)
         say(label + "\nOto atak açık, boss bekleniyor")
         fightMaint()
         val t0 = System.currentTimeMillis()
@@ -4635,7 +4519,6 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
-            keepAuto(b)
             val now = System.currentTimeMillis()
             if (miniRedAlive(b)) {
                 seen = true
@@ -4663,6 +4546,7 @@ class TimerService : AccessibilityService() {
                 return true
             }
         }
+        lastFightEnd = System.currentTimeMillis()
         routeKills++
         ev("Boss kesildi")
         say("Boss kesildi, sıradakine geçiliyor")
