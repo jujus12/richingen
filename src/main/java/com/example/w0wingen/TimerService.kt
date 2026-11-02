@@ -2475,6 +2475,7 @@ class TimerService : AccessibilityService() {
     }
 
     private var profileBtn: Button? = null
+    private val stepViews = HashMap<String, Pair<TextView, Int>>()
 
     private fun updateProfileBtn() {
         val names = profileNames(prefs())
@@ -2503,6 +2504,7 @@ class TimerService : AccessibilityService() {
         redRadiusView?.text = cfgI("redRadius", 150).toString()
         routeRadiusView?.text = cfgI("routeRadius", 150).toString()
         gapView?.text = String.format("%.2f", gap() / 1000f)
+        for ((k, pv) in stepViews) pv.first.text = cfgI(k, pv.second).toString()
         say("Profil yüklendi: " + next)
         toast("Profil: " + next)
     }
@@ -2790,6 +2792,54 @@ class TimerService : AccessibilityService() {
             boxMacro.addView(mr, rlp)
         }
         refreshMacroLabels()
+
+        // buff eşikleri panelden ayarlanır
+        val boxBuff = sect(tabMaint, "BUFF EŞİĞİ (ATK ve DEF ikisi de altındaysa buff'a gidilir)")
+        fun stepRow(label: String, key: String, def: Int, lo: Int, hi: Int, stepOf: () -> Int) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            val l = TextView(this)
+            l.text = label
+            l.textSize = 11f
+            l.setTextColor(Color.WHITE)
+            row.addView(l, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val v = TextView(this)
+            v.text = cfgI(key, def).toString()
+            v.textSize = 13f
+            v.gravity = Gravity.CENTER
+            v.setTextColor(ACCENT)
+            stepViews[key] = Pair(v, def)
+            fun bump(sign: Int) {
+                val nv = (cfgI(key, def) + sign * stepOf()).coerceIn(lo, hi)
+                prefs().edit().putString("cfg_" + key, nv.toString()).apply()
+                v.text = nv.toString()
+            }
+            row.addView(mkBtn("−") { bump(-1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+            row.addView(v, LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT))
+            row.addView(mkBtn("+") { bump(1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+            boxBuff.addView(row, rlp)
+        }
+        val stepBtn = mkBtn("") { }
+        fun stepLabel() {
+            stepBtn.text = "Adım: " + prefs().getInt("buffStep", 1000) + "  ▸"
+        }
+        stepLabel()
+        stepBtn.setOnClickListener {
+            val cur = prefs().getInt("buffStep", 1000)
+            val nx = when (cur) {
+                100 -> 1000
+                1000 -> 10000
+                else -> 100
+            }
+            prefs().edit().putInt("buffStep", nx).apply()
+            stepLabel()
+        }
+        boxBuff.addView(stepBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(34)).also { it.topMargin = dp(6) })
+        stepRow("Minimum ATK", "minAtk", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
+        stepRow("Minimum DEF", "minDef", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
+        stepRow("Buff wire'ı", "buffWire", 3, 1, 3) { 1 }
+        stepRow("Buff bekleme sınırı (sn)", "buffWait", 90, 15, 600) { 15 }
         boxAutoBtns.addView(
             btnRow(listOf<Pair<String, () -> Unit>>("Farma git" to { runManual { doFarm() } }), dp(36)),
             rlp
