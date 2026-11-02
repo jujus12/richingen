@@ -80,10 +80,10 @@ class MainActivity : Activity() {
         Field("goldRetry", "Golden yeniden bakma", "Haritada hiç canlı golden görünmezse bu kadar saniye sonra tekrar bakılır; bu arada farm/bekleme (sn)", "15")
     )
 
-    private val BG = 0xFF0F1115.toInt()
-    private val CARD = 0xFF1B1F2A.toInt()
-    private val INPUT = 0xFF262B3A.toInt()
-    private val ACCENT = 0xFF4FC3F7.toInt()
+    private var BG = 0xFF0F1115.toInt()
+    private var CARD = 0xFF1B1F2A.toInt()
+    private var INPUT = 0xFF262B3A.toInt()
+    private var ACCENT = 0xFF4FC3F7.toInt()
     private val DIM = 0xFF9AA3B5.toInt()
 
     private val inputs = HashMap<String, EditText>()
@@ -115,6 +115,11 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val th = TimerService.THEMES[prefs().getInt("theme", 0).coerceIn(0, TimerService.THEMES.size - 1)]
+        ACCENT = th[0]
+        BG = th[4]
+        CARD = th[2]
+        INPUT = th[5]
 
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL

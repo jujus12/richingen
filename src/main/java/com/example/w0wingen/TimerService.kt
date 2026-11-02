@@ -208,6 +208,16 @@ class TimerService : AccessibilityService() {
             Triple("routeRandomOn", "Rota Rnd", false)
         )
 
+        /** Temalar: vurgu, panel, kart, eksik, ayar ekranı zemini, ayar ekranı girişi. */
+        val THEME_NAMES = listOf("Mavi", "Zümrüt", "Mor", "Turuncu", "Gül")
+        val THEMES = listOf(
+            intArrayOf(0xFF4FC3F7.toInt(), 0xF2161920.toInt(), 0xFF272C3A.toInt(), 0xFF4A2429.toInt(), 0xFF0F1115.toInt(), 0xFF262B3A.toInt()),
+            intArrayOf(0xFF2DD4BF.toInt(), 0xF2101A18.toInt(), 0xFF1F302C.toInt(), 0xFF4A2429.toInt(), 0xFF0B1412.toInt(), 0xFF1F2E2B.toInt()),
+            intArrayOf(0xFFB388FF.toInt(), 0xF2181426.toInt(), 0xFF2B2540.toInt(), 0xFF4A2429.toInt(), 0xFF100C1A.toInt(), 0xFF2A2440.toInt()),
+            intArrayOf(0xFFFFB74D.toInt(), 0xF21C1712.toInt(), 0xFF332B20.toInt(), 0xFF4A2429.toInt(), 0xFF14100B.toInt(), 0xFF302A20.toInt()),
+            intArrayOf(0xFFFF6B81.toInt(), 0xF21A1215.toInt(), 0xFF33202A.toInt(), 0xFF4A2429.toInt(), 0xFF140B0F.toInt(), 0xFF301F27.toInt())
+        )
+
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
         private fun profKey(k: String) = k.startsWith("cfg_") && k != "cfg_ntfy" && k != "cfg_maps"
 
@@ -273,10 +283,10 @@ class TimerService : AccessibilityService() {
     private var handleLp: WindowManager.LayoutParams? = null
     private val toggleBtns = HashMap<String, Button>()
 
-    private val ACCENT = 0xFF4FC3F7.toInt()
-    private val PANEL_BG = 0xF2161920.toInt()
-    private val CARD_BG = 0xFF272C3A.toInt()
-    private val MISSING_BG = 0xFF4A2429.toInt()
+    private var ACCENT = 0xFF4FC3F7.toInt()
+    private var PANEL_BG = 0xF2161920.toInt()
+    private var CARD_BG = 0xFF272C3A.toInt()
+    private var MISSING_BG = 0xFF4A2429.toInt()
     private val TEXT_DIM = 0xFF9AA3B5.toInt()
     private val OK = 0xFF3DDC84.toInt()
     private val WARN = 0xFFF5B83D.toInt()
@@ -346,6 +356,71 @@ class TimerService : AccessibilityService() {
 
     private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
+    private fun applyTheme() {
+        val t = THEMES[prefs().getInt("theme", 0).coerceIn(0, THEMES.size - 1)]
+        ACCENT = t[0]
+        PANEL_BG = t[1]
+        CARD_BG = t[2]
+        MISSING_BG = t[3]
+    }
+
+    private fun rebuildUi() {
+        ui {
+            try {
+                panel?.let { wm.removeView(it) }
+                handle?.let { wm.removeView(it) }
+                stopWin?.let { wm.removeView(it) }
+            } catch (e: Exception) {
+            }
+            panel = null
+            handle = null
+            stopWin = null
+            sizeBtns.clear()
+            applyTheme()
+            buildUi()
+            rebuildList()
+            applyPanel()
+        }
+    }
+
+    // ---- sayaç (kesim istatistikleri)
+    private var statsView: TextView? = null
+    private var statsSaved = ""
+
+    private fun loadStats() {
+        kills = prefs().getInt("stat_kills", 0)
+        goldKills = prefs().getInt("stat_gold", 0)
+        redKills = prefs().getInt("stat_red", 0)
+        routeKills = prefs().getInt("stat_route", 0)
+        deaths = prefs().getInt("stat_deaths", 0)
+    }
+
+    private fun statsText(): String {
+        val run = if (autoRunning && startedAt > 0L) (System.currentTimeMillis() - startedAt) / 1000 else 0L
+        return "Boss " + kills + " · Golden " + goldKills + " · Red " + redKills + " · Rota " + routeKills + " · Ölüm " + deaths +
+            (if (run > 0) "\n⏱ " + fmt(run) else "")
+    }
+
+    private fun updateStats() {
+        statsView?.text = statsText()
+        val key = kills.toString() + "," + goldKills + "," + redKills + "," + routeKills + "," + deaths
+        if (key != statsSaved) {
+            statsSaved = key
+            prefs().edit().putInt("stat_kills", kills).putInt("stat_gold", goldKills).putInt("stat_red", redKills)
+                .putInt("stat_route", routeKills).putInt("stat_deaths", deaths).apply()
+        }
+    }
+
+    private fun resetStats() {
+        kills = 0
+        goldKills = 0
+        redKills = 0
+        routeKills = 0
+        deaths = 0
+        updateStats()
+        toast("Sayaç sıfırlandı")
+    }
+
     private val ticker = object : Runnable {
         override fun run() {
             tick()
@@ -359,6 +434,8 @@ class TimerService : AccessibilityService() {
         super.onServiceConnected()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         refreshScreen()
+        applyTheme()
+        loadStats()
         loadEntries()
         loadGolds()
         loadReds()
@@ -1551,7 +1628,131 @@ class TimerService : AccessibilityService() {
     }
 
     /** Oyundaki oto atak düğmesini istenen duruma getirir (düğme aç/kapa olduğu için durumu takip eder). */
+    // ---- oto atak durumu: düğme bölgesinin rengi "açık" ve "kapalı" için öğretilirse durum ekrandan okunur
+    private fun autoVec(b: Bitmap): FloatArray? {
+        val p = pt("autoAtk")
+        val s = b.width / 2560f
+        val half = maxOf(8, Math.round(40 * s))
+        val cx = (p.first * b.width).toInt()
+        val cy = (p.second * b.height).toInt()
+        val x0 = maxOf(0, cx - half)
+        val x1 = minOf(b.width - 1, cx + half)
+        val y0 = maxOf(0, cy - half)
+        val y1 = minOf(b.height - 1, cy + half)
+        if (x1 <= x0 || y1 <= y0) return null
+        var sr = 0L
+        var sg = 0L
+        var sb = 0L
+        var ss = 0L
+        var n = 0
+        for (y in y0..y1 step 2) for (x in x0..x1 step 2) {
+            val c = b.getPixel(x, y)
+            val r = Color.red(c)
+            val g = Color.green(c)
+            val bl = Color.blue(c)
+            sr += r
+            sg += g
+            sb += bl
+            ss += maxOf(r, maxOf(g, bl)) - minOf(r, minOf(g, bl))
+            n++
+        }
+        if (n == 0) return null
+        return floatArrayOf(sr.toFloat() / n, sg.toFloat() / n, sb.toFloat() / n, ss.toFloat() / n)
+    }
+
+    private fun vdist(a: FloatArray, b: FloatArray): Float {
+        var t = 0f
+        for (i in a.indices) t += (a[i] - b[i]) * (a[i] - b[i])
+        return Math.sqrt(t.toDouble()).toFloat()
+    }
+
+    private fun autoSig(key: String): FloatArray? {
+        val v = (prefs().getString(key, "") ?: "").split(",").mapNotNull { it.toFloatOrNull() }
+        return if (v.size == 4) v.toFloatArray() else null
+    }
+
+    /** Oto atak düğmesi açık mı: true/false, öğrenilmemişse ya da emin değilse null. */
+    private fun autoState(b: Bitmap): Boolean? {
+        val on = autoSig("autoSigOn") ?: return null
+        val off = autoSig("autoSigOff") ?: return null
+        val gapv = vdist(on, off)
+        if (gapv < 8f) return null
+        val v = autoVec(b) ?: return null
+        val dOn = vdist(v, on)
+        val dOff = vdist(v, off)
+        if (minOf(dOn, dOff) > 0.7f * gapv) return null
+        return dOn < dOff
+    }
+
+    private fun autoCalibrated(): Boolean {
+        val on = autoSig("autoSigOn") ?: return false
+        val off = autoSig("autoSigOff") ?: return false
+        return vdist(on, off) >= 8f
+    }
+
+    private fun learnAuto(on: Boolean) {
+        closeMapIfOpen()
+        val b = shot() ?: fail("Ekran görüntüsü alınamadı")
+        val v = autoVec(b) ?: fail("Oto atak düğmesi okunamadı (autoAtk noktası işaretli mi?)")
+        prefs().edit().putString(if (on) "autoSigOn" else "autoSigOff", v.joinToString(",")).apply()
+        val other = autoSig(if (on) "autoSigOff" else "autoSigOn")
+        val msg = if (other == null) "Kaydedildi. Şimdi diğer durumu da öğret."
+        else if (vdist(v, other) < 8f) "Dikkat: açık ve kapalı görünümü neredeyse aynı, doğrulama kullanılamaz. autoAtk noktasını düğmenin ortasına işaretle."
+        else "Oto atak doğrulaması hazır."
+        say("Oto atak " + (if (on) "AÇIK" else "KAPALI") + " imzası kaydedildi. " + msg)
+        toast(msg)
+    }
+
+    /** Savaş döngülerinde: oto atak sessizce kapanmışsa tekrar açar (en çok 8 sn'de bir bakar). */
+    @Volatile private var lastKeepAuto = 0L
+
+    private fun keepAuto(b: Bitmap) {
+        val now = System.currentTimeMillis()
+        if (now - lastKeepAuto < 8000L) return
+        lastKeepAuto = now
+        if (!autoCalibrated() || mapOpen(b)) return
+        if (autoState(b) == false) {
+            tapPoint("autoAtk")
+            gameAuto = true
+            ev("Oto atak kapanmıştı, tekrar açıldı")
+            pause(500)
+        }
+    }
+
     private fun setAuto(want: Boolean) {
+        if (autoCalibrated()) {
+            var legacy = false
+            var ok = false
+            for (attempt in 0 until 3) {
+                val b = shot()
+                if (b == null) {
+                    legacy = true
+                    break
+                }
+                if (mapOpen(b)) {
+                    tapPoint("closeMap")
+                    pause(600)
+                    continue
+                }
+                val st = autoState(b)
+                if (st == null) {
+                    legacy = true
+                    break
+                }
+                if (st == want) {
+                    gameAuto = want
+                    ok = true
+                    break
+                }
+                tapPoint("autoAtk")
+                pause(600)
+            }
+            if (!legacy) {
+                if (!ok) say("Oto atak durumu doğrulanamadı")
+                gameAuto = want
+                return
+            }
+        }
         // Her ışınlanma/wire değişiminde oyun oto atağı kapatır; açmak istediğimizde düğme her zaman kapalıdır.
         if (!want && !gameAuto) return
         tapPoint("autoAtk")
@@ -2133,6 +2334,7 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
+            keepAuto(b)
             if (miniAlive(b)) {
                 seen = true
                 dead = 0
@@ -2489,6 +2691,14 @@ class TimerService : AccessibilityService() {
         st.text = "Hazır"
         statusView = st
         outer.addView(st)
+        val stats = TextView(this)
+        stats.textSize = 11f
+        stats.setTextColor(ACCENT)
+        stats.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        stats.setPadding(0, dp(2), 0, dp(2))
+        statsView = stats
+        stats.text = statsText()
+        outer.addView(stats)
 
         // ana düğmeler
         val mainRow = LinearLayout(this)
@@ -2607,6 +2817,16 @@ class TimerService : AccessibilityService() {
         val boxRed = sect(tabMark, "RED BOSS")
         val boxRoute = sect(tabMark, "ROTA VE CANLI BOSS")
         val boxAutoBtns = sect(tabAuto, "ELLE")
+        boxAutoBtns.addView(
+            btnRow(
+                listOf<Pair<String, () -> Unit>>(
+                    "Auto AÇIK öğren" to { runManual { learnAuto(true) } },
+                    "Auto KAPALI öğren" to { runManual { learnAuto(false) } }
+                ),
+                dp(36)
+            ),
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(6) }
+        )
 
         // araçlar (varsayılan gizli)
         val tb = LinearLayout(this)
@@ -2629,6 +2849,18 @@ class TimerService : AccessibilityService() {
         val rlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         rlp.topMargin = dp(6)
         tb.addView(r1, rlp)
+        val themeBtn = mkBtn("") { }
+        fun themeLabel() {
+            themeBtn.text = "Tema: " + THEME_NAMES[prefs().getInt("theme", 0).coerceIn(0, THEMES.size - 1)] + "  ▸"
+        }
+        themeLabel()
+        themeBtn.setOnClickListener {
+            val n = (prefs().getInt("theme", 0) + 1) % THEMES.size
+            prefs().edit().putInt("theme", n).apply()
+            rebuildUi()
+        }
+        tb.addView(themeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
+        tb.addView(mkBtn("Sayacı sıfırla") { resetStats() }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
         boxMaintBtns.addView(r2, rlp)
         val boxMacro = sect(tabMaint, "KAYITLI İŞLEMLER (kaydedersen bot bunları oynatır)")
         for ((k, v) in macroNames) {
@@ -3004,6 +3236,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun tick() {
+        updateStats()
         val now = System.currentTimeMillis()
         val lead = cfgI("leadSec", 20)
         for (e in snapshot()) {
@@ -3500,6 +3733,7 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
+            keepAuto(b)
             val now = System.currentTimeMillis()
             if (miniGoldAlive(b)) {
                 seen = true
@@ -3973,6 +4207,7 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
+            keepAuto(b)
             val now = System.currentTimeMillis()
             if (miniRedAlive(b)) {
                 seen = true
@@ -4400,6 +4635,7 @@ class TimerService : AccessibilityService() {
                 pause(600)
                 continue
             }
+            keepAuto(b)
             val now = System.currentTimeMillis()
             if (miniRedAlive(b)) {
                 seen = true
@@ -5083,7 +5319,7 @@ class TimerService : AccessibilityService() {
         val now = System.currentTimeMillis()
         val sb = StringBuilder()
         sb.append(if (autoRunning) "Otomasyon AÇIK (" + ((now - startedAt) / 60000) + " dk)" else "Otomasyon kapalı")
-        sb.append("\nBoss " + kills + " · Golden " + goldKills + " · Red " + redKills + " · Ölüm " + deaths + (if (farming) " · farmda" else ""))
+        sb.append("\nBoss " + kills + " · Golden " + goldKills + " · Red " + redKills + " · Rota " + routeKills + " · Ölüm " + deaths + (if (farming) " · farmda" else ""))
         sb.append("\nŞu an: " + lastSay.replace("\n", " · "))
         val nx = snapshot().sortedBy { it.endMs }.take(5)
         if (nx.isNotEmpty()) {
