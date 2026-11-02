@@ -2793,6 +2793,7 @@ class TimerService : AccessibilityService() {
         val r6 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "Canlı boss kaydet" to { runManual { doSaveAlive() } },
+                "Gizli nokta" to { runManual { hiddenMark() } },
                 "Rota listesi" to { toggleRouteWin() }
             ),
             dp(36)
@@ -4388,6 +4389,7 @@ class TimerService : AccessibilityService() {
     private fun routeSnapshot(): List<String> = synchronized(lock) { ArrayList(route) }
 
     private fun resetRoute() {
+        routeHiddenDone = false
         routeIdx = 0
         routeWire = 1
         routeAt = false
@@ -4435,8 +4437,13 @@ class TimerService : AccessibilityService() {
         }
         if (routeKill()) {
             fails = 0
+        } else if (!routeHiddenDone && hiddenPts(name).isNotEmpty()) {
+            routeHiddenDone = true
+            routeHidden(name)
+            fails = 0
         } else {
             routeAt = false
+            routeHiddenDone = false
             routeWire++
             if (routeWire > wires) {
                 routeWire = 1
@@ -4932,6 +4939,211 @@ class TimerService : AccessibilityService() {
             }
             panelOpen = true
             updateUi()
+        }
+    }
+
+    // ------------------------------------------------------------------ rota: haritada görünmeyen (sadece mini haritada çıkan) bosslar için gizli noktalar
+
+    @Volatile private var routeHiddenDone = false
+
+    private fun hiddenAll(): JSONObject =
+        try {
+            JSONObject(prefs().getString("hidden", "{}") ?: "{}")
+        } catch (e: Exception) {
+            JSONObject()
+        }
+
+    private fun hiddenPts(map: String): List<PointF> {
+        val out = ArrayList<PointF>()
+        try {
+            val a = hiddenAll().optJSONArray(key(map)) ?: return out
+            for (i in 0 until a.length()) {
+                val o = a.getJSONArray(i)
+                out.add(PointF(o.getDouble(0).toFloat(), o.getDouble(1).toFloat()))
+            }
+        } catch (e: Exception) {
+        }
+        return out
+    }
+
+    private fun hiddenSave(map: String, pts: List<PointF>) {
+        val all = hiddenAll()
+        val a = JSONArray()
+        for (p in pts) {
+            val o = JSONArray()
+            o.put(p.x.toDouble())
+            o.put(p.y.toDouble())
+            a.put(o)
+        }
+        if (pts.isEmpty()) all.remove(key(map)) else all.put(key(map), a)
+        prefs().edit().putString("hidden", all.toString()).apply()
+    }
+
+    /** Haritayı açar; gizli boss noktaları dokunarak işaretlenir (haritada ikon görünmese de bilinen konum). */
+    private fun hiddenMark() {
+        closeMapIfOpen()
+        val info = readMapWireRetry()
+        ensureMap()
+        refreshScreen()
+        say("Gizli nokta işaretleme: " + info.first)
+        ui { showHiddenMark(info.first) }
+    }
+
+    private fun showHiddenMark(map: String) {
+        removeExtra()
+        val picked = ArrayList<PointF>()
+        val existing = hiddenPts(map).map { PointF(it.x * screenW, it.y * screenH) }
+        val view = RedMarkView(this, emptyList(), existing, picked)
+        val fl = FrameLayout(this)
+        fl.setBackgroundColor(0x22000000)
+        fl.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.background = rounded(0xEE161920.toInt(), 12)
+        bar.setPadding(dp(8), dp(6), dp(8), dp(6))
+        val info = TextView(this)
+        info.setTextColor(Color.WHITE)
+        info.textSize = 12f
+        fun refreshInfo() {
+            info.text = map + "\nBossun durduğu yere dokun. Yeni: " + picked.size + " · kayıtlı: " + existing.size + " (camgöbeği)"
+        }
+        refreshInfo()
+        bar.addView(info)
+        bar.addView(mkBtn("Kaydet", OK, 0xFF04200F.toInt()) {
+            val pts = ArrayList<PointF>(hiddenPts(map))
+            for (k in picked) pts.add(PointF(k.x / screenW, k.y / screenH))
+            hiddenSave(map, pts)
+            removeExtra()
+            toast(picked.size.toString() + " gizli nokta kaydedildi (" + map + ")")
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(90), dp(40)))
+        bar.addView(mkBtn("Haritayı sil", BAD) {
+            hiddenSave(map, emptyList())
+            removeExtra()
+            toast("Bu haritanın gizli noktaları silindi")
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(110), dp(40)))
+        bar.addView(mkBtn("İptal") {
+            removeExtra()
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(80), dp(40)))
+        fl.addView(
+            bar,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            )
+        )
+        view.setOnTouchListener { _, ev ->
+            if (ev.action == MotionEvent.ACTION_UP) {
+                val t = PointF(ev.rawX, ev.rawY)
+                val already = picked.firstOrNull { dist(it, t) < 30f }
+                if (already != null) picked.remove(already) else picked.add(t)
+                view.invalidate()
+                refreshInfo()
+            }
+            true
+        }
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        wm.addView(fl, lp)
+        extra = fl
+    }
+
+    /** Haritada ikonu olmayan bossun savaşı: oto atak açılır, mini haritadaki boss ikonu kaybolunca öldü sayılır. */
+    private fun hiddenFight(label: String): Boolean {
+        gameAuto = false
+        setAuto(true)
+        if (on("angelOn") && hasPt("angel")) {
+            tapPoint("angel")
+            pause(300)
+        }
+        say(label + "\nOto atak açık, gizli boss savaşılıyor")
+        fightMaint()
+        val t0 = System.currentTimeMillis()
+        val limit = cfgI("fightTimeout", 300) * 1000L
+        var seen = false
+        var dead = 0
+        while (true) {
+            pause(150)
+            if (autoRunning && nextDue() != null) {
+                setAuto(false)
+                say("Boss zamanı geldi, gizli boss bırakıldı")
+                return true
+            }
+            val b = shot() ?: continue
+            if (orangeAt(b, "closeMap")) {
+                tapPoint("closeMap")
+                pause(600)
+                continue
+            }
+            val now = System.currentTimeMillis()
+            if (miniRedAlive(b)) {
+                seen = true
+                dead = 0
+                say(label + "\nGizli boss canlı, savaşılıyor")
+            } else if (seen) {
+                dead++
+                say(label + "\nGizli boss öldü mü? " + dead + "/3")
+                if (dead >= 3) break
+            } else if (now - t0 > 6000) {
+                say(label + "\nBoss görünmedi")
+                return false
+            }
+            if (now - t0 > limit) {
+                setAuto(false)
+                say("Gizli boss zaman aşımı")
+                return true
+            }
+        }
+        lastFightEnd = System.currentTimeMillis()
+        routeKills++
+        ev("Gizli boss kesildi")
+        say("Gizli boss kesildi")
+        return true
+    }
+
+    /** Bu haritanın gizli noktalarına sırayla gider (rota Random açıksa Random ile); mini haritada boss görürse keser. */
+    private fun routeHidden(name: String) {
+        val pts = hiddenPts(name)
+        for ((i, pt) in pts.withIndex()) {
+            val label = "Gizli nokta " + (i + 1) + "/" + pts.size
+            say(label + ": gidiliyor")
+            val mb = ensureMap()
+            try {
+                approach(mb, pt.x, pt.y, label, cfgI("routeRadius", 150).toFloat(), on("routeRandomOn"))
+            } catch (e: StepFail) {
+                continue
+            }
+            var found = false
+            val t0 = System.currentTimeMillis()
+            while (System.currentTimeMillis() - t0 < 4000L) {
+                val b = shot() ?: continue
+                if (orangeAt(b, "closeMap")) {
+                    tapPoint("closeMap")
+                    pause(500)
+                    continue
+                }
+                if (miniRedAlive(b)) {
+                    found = true
+                    break
+                }
+                pause(300)
+            }
+            if (!found) {
+                say(label + ": boss yok")
+                continue
+            }
+            hiddenFight("Gizli boss")
         }
     }
 
