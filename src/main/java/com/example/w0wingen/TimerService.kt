@@ -2509,7 +2509,142 @@ class TimerService : AccessibilityService() {
         toast("Profil: " + next)
     }
 
+    // ------------------------------------------------------------------ Ana sekme: seçili profilde AÇIK olan seçenekler tek ekranda
+
+    private var homeBox: LinearLayout? = null
+
+    private fun refreshHome() {
+        val hb = homeBox ?: return
+        ui { buildHome(hb) }
+    }
+
+    private fun buildHome(box: LinearLayout) {
+        box.removeAllViews()
+        val full = LinearLayout.LayoutParams.MATCH_PARENT
+        val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
+        fun lpTop(h: Int = wrap): LinearLayout.LayoutParams {
+            val l = LinearLayout.LayoutParams(full, h)
+            l.topMargin = dp(6)
+            return l
+        }
+        fun head(t: String) {
+            val lab = TextView(this)
+            lab.text = t
+            lab.textSize = 11f
+            lab.setTextColor(ACCENT)
+            lab.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            lab.setPadding(0, dp(10), 0, dp(2))
+            box.addView(lab)
+        }
+        fun step(label: String, key: String, def: Int, lo: Int, hi: Int, st: () -> Int) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            val l = TextView(this)
+            l.text = label
+            l.textSize = 11f
+            l.setTextColor(Color.WHITE)
+            row.addView(l, LinearLayout.LayoutParams(0, wrap, 1f))
+            val v = TextView(this)
+            v.text = cfgI(key, def).toString()
+            v.textSize = 13f
+            v.gravity = Gravity.CENTER
+            v.setTextColor(ACCENT)
+            fun bump(sign: Int) {
+                val nv = (cfgI(key, def) + sign * st()).coerceIn(lo, hi)
+                prefs().edit().putString("cfg_" + key, nv.toString()).apply()
+                v.text = nv.toString()
+            }
+            row.addView(mkBtn("−") { bump(-1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+            row.addView(v, LinearLayout.LayoutParams(dp(64), wrap))
+            row.addView(mkBtn("+") { bump(1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
+            box.addView(row, lpTop())
+        }
+        fun buttons(items: List<Pair<String, () -> Unit>>) = box.addView(btnRow(items, dp(36)), lpTop())
+
+        val names = profileNames(prefs())
+        val active = prefs().getString("profile_active", "") ?: ""
+        val pbtn = mkBtn(if (names.isEmpty()) "Profil yok (ayar ekranından kaydet)" else "Profil: " + (if (active.isEmpty()) "-" else active) + "  ▸") { cycleProfile() }
+        pbtn.textSize = 13f
+        box.addView(pbtn, lpTop(dp(40)))
+        val onList = TOGGLES.filter { on(it.first) }.map { it.second }
+        val info = TextView(this)
+        info.textSize = 11f
+        info.setTextColor(TEXT_DIM)
+        info.setPadding(0, dp(6), 0, 0)
+        info.text = if (onList.isEmpty()) "Açık seçenek yok. Oto sekmesinden aç." else "Açık: " + onList.joinToString(" · ")
+        box.addView(info)
+
+        if (on("farmOn")) {
+            head("FARM")
+            step("Farm wire'ı", "farmWire", 3, 1, 3) { 1 }
+            step("Varış bekleme (sn)", "farmWait", 10, 0, 60) { 5 }
+        }
+        if (on("idleFarmOn")) {
+            head("BOŞTA FARM")
+            step("Kesim yoksa (dk)", "idleFarmMin", 10, 0, 120) { 1 }
+            step("Farmda kal (dk)", "idleFarmStay", 10, 1, 120) { 1 }
+        }
+        if (on("routeOn")) {
+            head("ROTA")
+            buttons(listOf<Pair<String, () -> Unit>>("Rota listesi" to { toggleRouteWin() }, "Gizli nokta" to { runManual { hiddenMark() } }, "Canlı boss kaydet" to { runManual { doSaveAlive() } }))
+            if (on("routeRandomOn")) step("Rota Random yarıçap (px)", "routeRadius", 150, 0, 1000) { 25 }
+        }
+        if (on("goldOn")) {
+            head("GOLDEN")
+            buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
+            step("Golden wire'ı", "goldWire", 3, 1, 3) { 1 }
+            if (on("goldRandomOn")) step("Golden Random yarıçap (px)", "goldRadius", 150, 0, 1000) { 25 }
+        }
+        if (on("redOn")) {
+            head("RED BOSS")
+            buttons(listOf<Pair<String, () -> Unit>>("Red işaretle" to { runManual { redMark() } }, "Red listesi" to { toggleRedWin() }))
+            if (on("redRandomOn")) step("Red Random yarıçap (px)", "redRadius", 150, 0, 1000) { 25 }
+        }
+        if (on("randomOn")) {
+            head("BOSSA GİDİŞ")
+            step("Random yarıçap (px)", "radius", 200, 0, 1000) { 25 }
+        }
+        if (on("potOn") || on("recycleOn")) {
+            head("POT VE RECYCLE")
+            if (on("potOn")) {
+                step("Pot eşiği", "potMin", 20, 0, 999) { 5 }
+                step("Pot okuma (sn)", "potWatchSec", 60, 10, 600) { 10 }
+            }
+            if (on("recycleOn")) {
+                step("Her kaç kesimde Recycle (0=kapalı)", "recycleKillEvery", 0, 0, 50) { 1 }
+                step("Recycle aralığı (dk)", "recycleEvery", 20, 1, 240) { 5 }
+            }
+        }
+        if (on("buffOn")) {
+            head("BUFF")
+            val bs = mkBtn("Adım: " + prefs().getInt("buffStep", 1000) + "  ▸") { }
+            bs.setOnClickListener {
+                val cur = prefs().getInt("buffStep", 1000)
+                prefs().edit().putInt("buffStep", when (cur) { 100 -> 1000; 1000 -> 10000; else -> 100 }).apply()
+                refreshHome()
+            }
+            box.addView(bs, lpTop(dp(34)))
+            step("Minimum ATK", "minAtk", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
+            step("Minimum DEF", "minDef", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
+            step("Buff wire'ı", "buffWire", 3, 1, 3) { 1 }
+        }
+        if (on("impOn") || on("angelOn") || on("reviveOn")) {
+            head("SAVAŞ")
+            val l = ArrayList<String>()
+            if (on("impOn")) l.add("Imp")
+            if (on("angelOn")) l.add("Angel")
+            if (on("reviveOn")) l.add("Free Revival")
+            val t = TextView(this)
+            t.textSize = 11f
+            t.setTextColor(Color.WHITE)
+            t.text = l.joinToString(" · ") + " açık"
+            box.addView(t)
+        }
+    }
+
     private fun updateToggles() {
+        refreshHome()
         for (t in TOGGLES) {
             val btn = toggleBtns[t.first] ?: continue
             val isOn = on(t.first)
@@ -3009,8 +3144,13 @@ class TimerService : AccessibilityService() {
         tabTools.addView(tb)
 
         // sekmeler
-        val tabNames = listOf("Boss", "Oto", "İşaret", "Bakım", "Araç")
-        val tabViews = listOf<View>(tabBoss, tabAuto, tabMark, tabMaint, tabTools)
+        val tabHome = LinearLayout(this)
+        tabHome.orientation = LinearLayout.VERTICAL
+        homeBox = tabHome
+        val homeScroll = ScrollView(this)
+        homeScroll.addView(tabHome)
+        val tabNames = listOf("Ana", "Boss", "Oto", "İşaret", "Bakım", "Araç")
+        val tabViews = listOf<View>(homeScroll, tabBoss, tabAuto, tabMark, tabMaint, tabTools)
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
         tabBar.orientation = LinearLayout.HORIZONTAL
@@ -3036,12 +3176,14 @@ class TimerService : AccessibilityService() {
         val tbl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         tbl.topMargin = dp(6)
         outer.addView(tabBar, tbl)
+        outer.addView(homeScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
         outer.addView(tabBoss)
         outer.addView(tabAuto)
         outer.addView(tabMark)
         outer.addView(tabMaint)
         outer.addView(tabTools)
-        showTab(prefs().getInt("tab", 0).coerceIn(0, 4))
+        buildHome(tabHome)
+        showTab(prefs().getInt("tab", 0).coerceIn(0, 5))
         outer.addView(mainRow, mainRowLp)
         outer.alpha = uiAlpha() / 100f
         updateSizeBtns()
