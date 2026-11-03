@@ -2587,7 +2587,7 @@ class TimerService : AccessibilityService() {
         }
         if (on("routeOn")) {
             head("ROTA")
-            buttons(listOf<Pair<String, () -> Unit>>("Rota listesi" to { toggleRouteWin() }, "Gizli nokta" to { runManual { hiddenMark() } }, "Canlı boss kaydet" to { runManual { doSaveAlive() } }))
+            buttons(listOf<Pair<String, () -> Unit>>("Rota listesi" to { toggleRouteWin() }, "Gizli nokta" to { runManual { hiddenMark() } }, "Yoksay" to { runManual { ignoreMark() } }, "Canlı boss kaydet" to { runManual { doSaveAlive() } }))
             if (on("routeRandomOn")) step("Rota Random yarıçap (px)", "routeRadius", 150, 0, 1000) { 25 }
         }
         if (on("goldOn")) {
@@ -3007,12 +3007,21 @@ class TimerService : AccessibilityService() {
         val r6 = btnRow(
             listOf<Pair<String, () -> Unit>>(
                 "Canlı boss kaydet" to { runManual { doSaveAlive() } },
-                "Gizli nokta" to { runManual { hiddenMark() } },
                 "Rota listesi" to { toggleRouteWin() }
             ),
             dp(36)
         )
         boxRoute.addView(r6, rlp)
+        boxRoute.addView(
+            btnRow(
+                listOf<Pair<String, () -> Unit>>(
+                    "Gizli nokta" to { runManual { hiddenMark() } },
+                    "Yoksay işaretle" to { runManual { ignoreMark() } }
+                ),
+                dp(36)
+            ),
+            rlp
+        )
         val rr = LinearLayout(this)
         rr.orientation = LinearLayout.HORIZONTAL
         rr.gravity = Gravity.CENTER_VERTICAL
@@ -4682,6 +4691,8 @@ class TimerService : AccessibilityService() {
         refreshScreen()
         val sc = mb.width / 2560f
         val marks = emptyList<PointF>()
+        val rmaps = routeSnapshot()
+        val ign = (if (rmaps.isEmpty()) emptyList() else ignPts(rmaps[routeIdx % rmaps.size])).map { PointF(it.x * screenW, it.y * screenH) }
         val radius = cfgI("routeRadius", 150).toFloat()
         val useRandom = on("routeRandomOn") && radius > 0f && hasPt("random")
         val maxTry = cfgI("randomMax", 40)
@@ -4697,6 +4708,7 @@ class TimerService : AccessibilityService() {
             for (k in scanSkulls(mb) { isRedIcon(it) || isBossRed(it) }) {
                 if (marks.isNotEmpty() && marks.none { dist(it, k) <= 45f * sc }) continue
                 if (routeSkip.any { dist(it.first, k) <= 30f * sc }) continue
+                if (ign.any { dist(it, k) <= 40f * sc }) continue
                 val d = if (me != null) dist(me, k) else 0f
                 if (d < bd) {
                     bd = d
@@ -5366,6 +5378,132 @@ class TimerService : AccessibilityService() {
             }
             hiddenFight("Gizli boss")
         }
+    }
+
+    // ------------------------------------------------------------------ rota: yoksayılacak (kesilmeyecek) boss noktaları
+
+    private fun ignAll(): JSONObject =
+        try {
+            JSONObject(prefs().getString("ignorepts", "{}") ?: "{}")
+        } catch (e: Exception) {
+            JSONObject()
+        }
+
+    private fun ignPts(map: String): List<PointF> {
+        val out = ArrayList<PointF>()
+        try {
+            val a = ignAll().optJSONArray(key(map)) ?: return out
+            for (i in 0 until a.length()) {
+                val o = a.getJSONArray(i)
+                out.add(PointF(o.getDouble(0).toFloat(), o.getDouble(1).toFloat()))
+            }
+        } catch (e: Exception) {
+        }
+        return out
+    }
+
+    private fun ignSave(map: String, pts: List<PointF>) {
+        val all = ignAll()
+        val a = JSONArray()
+        for (p in pts) {
+            val o = JSONArray()
+            o.put(p.x.toDouble())
+            o.put(p.y.toDouble())
+            a.put(o)
+        }
+        if (pts.isEmpty()) all.remove(key(map)) else all.put(key(map), a)
+        prefs().edit().putString("ignorepts", all.toString()).apply()
+    }
+
+    /** Haritayı açar, canlı boss ikonlarını gösterir; dokunulanlar bu harita için yoksayılır (rota onlara gitmez). */
+    private fun ignoreMark() {
+        closeMapIfOpen()
+        val info = readMapWireRetry()
+        val mb = ensureMap()
+        refreshScreen()
+        val skulls = scanSkulls(mb) { isRedIcon(it) || isBossRed(it) }
+        say("Yoksay işaretleme: " + info.first + " · " + skulls.size + " ikon bulundu")
+        ui { showIgnoreMark(info.first, skulls) }
+    }
+
+    private fun showIgnoreMark(map: String, skulls: List<PointF>) {
+        removeExtra()
+        val picked = ArrayList<PointF>()
+        val existing = ignPts(map).map { PointF(it.x * screenW, it.y * screenH) }
+        val view = RedMarkView(this, skulls, existing, picked)
+        val fl = FrameLayout(this)
+        fl.setBackgroundColor(0x22000000)
+        fl.addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.gravity = Gravity.CENTER_VERTICAL
+        bar.background = rounded(0xEE161920.toInt(), 12)
+        bar.setPadding(dp(8), dp(6), dp(8), dp(6))
+        val info = TextView(this)
+        info.setTextColor(Color.WHITE)
+        info.textSize = 12f
+        fun refreshInfo() {
+            info.text = map + "\nYoksayılacak bossa dokun. Yeni: " + picked.size + " · kayıtlı: " + existing.size + " (camgöbeği)"
+        }
+        refreshInfo()
+        bar.addView(info)
+        bar.addView(mkBtn("Kaydet", OK, 0xFF04200F.toInt()) {
+            val pts = ArrayList<PointF>(ignPts(map))
+            for (k in picked) pts.add(PointF(k.x / screenW, k.y / screenH))
+            ignSave(map, pts)
+            removeExtra()
+            toast(picked.size.toString() + " nokta yoksayılacak (" + map + ")")
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(90), dp(40)))
+        bar.addView(mkBtn("Haritayı sil", BAD) {
+            ignSave(map, emptyList())
+            removeExtra()
+            toast("Bu haritanın yoksay listesi silindi")
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(110), dp(40)))
+        bar.addView(mkBtn("İptal") {
+            removeExtra()
+            if (!busy) job { closeMapIfOpen() }
+        }, LinearLayout.LayoutParams(dp(80), dp(40)))
+        fl.addView(
+            bar,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            )
+        )
+        view.setOnTouchListener { _, ev ->
+            if (ev.action == MotionEvent.ACTION_UP) {
+                val t = PointF(ev.rawX, ev.rawY)
+                var near: PointF? = null
+                var nd = 55f
+                for (k in skulls) {
+                    val d = dist(k, t)
+                    if (d < nd) {
+                        nd = d
+                        near = k
+                    }
+                }
+                val spot = near ?: t
+                val already = picked.firstOrNull { dist(it, spot) < 30f }
+                if (already != null) picked.remove(already) else picked.add(spot)
+                view.invalidate()
+                refreshInfo()
+            }
+            true
+        }
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        wm.addView(fl, lp)
+        extra = fl
     }
 
     // ------------------------------------------------------------------ zaman kayıtları (günlük)
