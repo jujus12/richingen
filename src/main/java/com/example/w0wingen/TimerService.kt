@@ -3819,6 +3819,10 @@ class TimerService : AccessibilityService() {
             }
             gameAuto = false
             setAuto(true)
+            if (on("angelOn") && hasPt("angel")) {
+                tapPoint("angel")
+                pause(300)
+            }
         }
         say(label + "\nOto atak açık, golden bekleniyor")
         fightMaint()
