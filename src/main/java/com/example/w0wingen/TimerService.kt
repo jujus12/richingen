@@ -28,6 +28,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.HorizontalScrollView
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -459,6 +460,7 @@ class TimerService : AccessibilityService() {
         pollThread?.interrupt()
         closeBossWin()
         closeStopwatch()
+        closeShortcuts()
         cancel = true
         autoRunning = false
         worker?.interrupt()
@@ -1273,7 +1275,7 @@ class TimerService : AccessibilityService() {
             try {
                 if (through) {
                     val m = dp(24)
-                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(stopWin, stopLp))
+                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp))
                     for ((v, lp) in cands) {
                         if (v == null || lp == null || v.visibility != View.VISIBLE) continue
                         val w = if (v.width > 0) v.width else lp.width
@@ -2495,7 +2497,14 @@ class TimerService : AccessibilityService() {
             return
         }
         val a = prefs().getString("profile_active", "") ?: ""
-        val next = names[(names.indexOf(a) + 1) % names.size]
+        loadProfile(names[(names.indexOf(a) + 1) % names.size])
+    }
+
+    private fun loadProfile(next: String) {
+        if (autoRunning || busy) {
+            say("Otomasyon açıkken profil değişmez. Önce durdur.")
+            return
+        }
         applyProfile(prefs(), next)
         updateToggles()
         updateProfileBtn()
@@ -2520,6 +2529,7 @@ class TimerService : AccessibilityService() {
 
     private fun buildHome(box: LinearLayout) {
         box.removeAllViews()
+        var cur = box
         val full = LinearLayout.LayoutParams.MATCH_PARENT
         val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
         fun lpTop(h: Int = wrap): LinearLayout.LayoutParams {
@@ -2528,13 +2538,20 @@ class TimerService : AccessibilityService() {
             return l
         }
         fun head(t: String) {
+            val card = LinearLayout(this)
+            card.orientation = LinearLayout.VERTICAL
+            card.background = rounded(0x22FFFFFF, 12)
+            card.setPadding(dp(10), dp(6), dp(10), dp(10))
             val lab = TextView(this)
             lab.text = t
             lab.textSize = 11f
             lab.setTextColor(ACCENT)
             lab.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            lab.setPadding(0, dp(10), 0, dp(2))
-            box.addView(lab)
+            card.addView(lab)
+            val cl = LinearLayout.LayoutParams(full, wrap)
+            cl.topMargin = dp(8)
+            box.addView(card, cl)
+            cur = card
         }
         fun step(label: String, key: String, def: Int, lo: Int, hi: Int, st: () -> Int) {
             val row = LinearLayout(this)
@@ -2558,22 +2575,48 @@ class TimerService : AccessibilityService() {
             row.addView(mkBtn("−") { bump(-1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
             row.addView(v, LinearLayout.LayoutParams(dp(64), wrap))
             row.addView(mkBtn("+") { bump(1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-            box.addView(row, lpTop())
+            cur.addView(row, lpTop())
         }
-        fun buttons(items: List<Pair<String, () -> Unit>>) = box.addView(btnRow(items, dp(36)), lpTop())
+        fun buttons(items: List<Pair<String, () -> Unit>>) = cur.addView(btnRow(items, dp(36)), lpTop())
 
         val names = profileNames(prefs())
         val active = prefs().getString("profile_active", "") ?: ""
-        val pbtn = mkBtn(if (names.isEmpty()) "Profil yok (ayar ekranından kaydet)" else "Profil: " + (if (active.isEmpty()) "-" else active) + "  ▸") { cycleProfile() }
-        pbtn.textSize = 13f
-        box.addView(pbtn, lpTop(dp(40)))
+        val chipHead = TextView(this)
+        chipHead.text = "PROFİL"
+        chipHead.textSize = 11f
+        chipHead.setTextColor(ACCENT)
+        chipHead.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        box.addView(chipHead)
+        if (names.isEmpty()) {
+            val t = TextView(this)
+            t.text = "Profil yok. Uygulamadaki ayar ekranından kaydet."
+            t.textSize = 11f
+            t.setTextColor(TEXT_DIM)
+            box.addView(t)
+        } else {
+            val hs = HorizontalScrollView(this)
+            hs.isHorizontalScrollBarEnabled = false
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            for (n in names) {
+                val sel = n == active
+                val c = mkBtn(n, if (sel) ACCENT else CARD_BG, if (sel) 0xFF0B1220.toInt() else Color.WHITE) { loadProfile(n) }
+                c.textSize = 12f
+                val cl = LinearLayout.LayoutParams(wrap, dp(34))
+                cl.rightMargin = dp(6)
+                row.addView(c, cl)
+            }
+            hs.addView(row)
+            box.addView(hs, lpTop(dp(38)))
+        }
+        buttons(listOf<Pair<String, () -> Unit>>("Kısayollar" to { toggleShortcuts() }, "Kronometre" to { toggleStopwatch() }))
         val onList = TOGGLES.filter { on(it.first) }.map { it.second }
         val info = TextView(this)
         info.textSize = 11f
         info.setTextColor(TEXT_DIM)
         info.setPadding(0, dp(6), 0, 0)
         info.text = if (onList.isEmpty()) "Açık seçenek yok. Oto sekmesinden aç." else "Açık: " + onList.joinToString(" · ")
-        box.addView(info)
+        cur.addView(info)
 
         if (on("farmOn")) {
             head("FARM")
@@ -2624,7 +2667,7 @@ class TimerService : AccessibilityService() {
                 prefs().edit().putInt("buffStep", when (cur) { 100 -> 1000; 1000 -> 10000; else -> 100 }).apply()
                 refreshHome()
             }
-            box.addView(bs, lpTop(dp(34)))
+            cur.addView(bs, lpTop(dp(34)))
             step("Minimum ATK", "minAtk", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
             step("Minimum DEF", "minDef", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
             step("Buff wire'ı", "buffWire", 3, 1, 3) { 1 }
@@ -2639,12 +2682,13 @@ class TimerService : AccessibilityService() {
             t.textSize = 11f
             t.setTextColor(Color.WHITE)
             t.text = l.joinToString(" · ") + " açık"
-            box.addView(t)
+            cur.addView(t)
         }
     }
 
     private fun updateToggles() {
         refreshHome()
+        if (scWin != null) scRender()
         for (t in TOGGLES) {
             val btn = toggleBtns[t.first] ?: continue
             val isOn = on(t.first)
@@ -2991,7 +3035,8 @@ class TimerService : AccessibilityService() {
             listOf<Pair<String, () -> Unit>>(
                 "⏱ Zaman kaydet" to { addStamp() },
                 "Kayıt listesi" to { toggleStampWin() },
-                "Kronometre" to { toggleStopwatch() }
+                "Kronometre" to { toggleStopwatch() },
+                "Kısayollar" to { toggleShortcuts() }
             ),
             dp(36)
         )
@@ -5743,6 +5788,203 @@ class TimerService : AccessibilityService() {
         swLp = lp
         updateSw()
         main.postDelayed(swTick, 100)
+    }
+
+    // ------------------------------------------------------------------ kısayollar penceresi
+
+    private var scWin: LinearLayout? = null
+    private var scLp: WindowManager.LayoutParams? = null
+    private var scBody: LinearLayout? = null
+    private var scEdit = false
+
+    private fun scDefault() = "pot,buff,recycle,angel,t:randomOn"
+
+    private fun scList(): MutableList<String> =
+        (prefs().getString("shortcuts", scDefault()) ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+
+    private fun scSave(l: List<String>) {
+        prefs().edit().putString("shortcuts", l.joinToString(",")).apply()
+    }
+
+    private fun quickTap(name: String) {
+        if (!hasPt(name)) {
+            toast("Önce ayardan işaretle: " + name)
+            return
+        }
+        Thread {
+            try {
+                tapPoint(name)
+            } catch (e: Exception) {
+            }
+        }.start()
+    }
+
+    /** Eklenebilir kısayollar: anahtar, yazı, eylem. "t:" ile başlayanlar açık/kapalı düğmeleridir. */
+    private fun scCatalog(): List<Triple<String, String, () -> Unit>> {
+        val l = ArrayList<Triple<String, String, () -> Unit>>()
+        l.add(Triple("pot", "Pot", { runManual { doPots() } }))
+        l.add(Triple("recycle", "Recycle", { runManual { doRecycle() } }))
+        l.add(Triple("buff", "Buff", { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } }))
+        l.add(Triple("angel", "Angel", { quickTap("angel") }))
+        l.add(Triple("autoAtk", "Oto atak", { quickTap("autoAtk") }))
+        l.add(Triple("shield", "Kalkan", { quickTap("shield") }))
+        l.add(Triple("imp", "Imp", { quickTap("imp") }))
+        l.add(Triple("revive", "Diril", { quickTap("revive") }))
+        l.add(Triple("farm", "Farma git", { runManual { doFarm() } }))
+        l.add(Triple("stop", "Durdur", { stopJob() }))
+        l.add(Triple("stamp", "Zaman kaydet", { addStamp() }))
+        l.add(Triple("sw", "Kronometre", { toggleStopwatch() }))
+        for (t in TOGGLES) l.add(Triple("t:" + t.first, t.second, {
+            prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
+            updateToggles()
+        }))
+        return l
+    }
+
+    private fun scRender() {
+        val body = scBody ?: return
+        body.removeAllViews()
+        val cat = scCatalog()
+        val chosen = scList().filter { k -> cat.any { it.first == k } }
+        val full = LinearLayout.LayoutParams.MATCH_PARENT
+        val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
+        fun grid(keys: List<String>, add: Boolean) {
+            for (chunk in keys.chunked(2)) {
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                for ((j, k) in chunk.withIndex()) {
+                    val c = cat.first { it.first == k }
+                    val isTog = k.startsWith("t:")
+                    val isOn = isTog && on(k.substring(2))
+                    val label = if (add) "＋ " + c.second else if (scEdit) "✕ " + c.second else if (isTog) c.second + (if (isOn) " ✓" else " ✗") else c.second
+                    val bg = if (add) CARD_BG else if (isTog) (if (isOn) 0xFF1F5A3A.toInt() else MISSING_BG) else CARD_BG
+                    val bt = mkBtn(label, bg) {
+                        if (add) {
+                            val l = scList()
+                            if (!l.contains(k)) l.add(k)
+                            scSave(l)
+                            scRender()
+                        } else if (scEdit) {
+                            val l = scList()
+                            l.remove(k)
+                            scSave(l)
+                            scRender()
+                        } else {
+                            c.third()
+                            if (isTog) scRender()
+                        }
+                    }
+                    bt.textSize = 12f
+                    val bl = LinearLayout.LayoutParams(0, dp(38), 1f)
+                    if (j > 0) bl.leftMargin = dp(4)
+                    row.addView(bt, bl)
+                }
+                if (chunk.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, dp(38), 1f).also { it.leftMargin = dp(4) })
+                val rl = LinearLayout.LayoutParams(full, wrap)
+                rl.topMargin = dp(4)
+                body.addView(row, rl)
+            }
+        }
+        if (chosen.isEmpty() && !scEdit) {
+            val t = TextView(this)
+            t.text = "Boş. ✎ ile düğme ekle."
+            t.textSize = 12f
+            t.setTextColor(Color.LTGRAY)
+            body.addView(t)
+        }
+        grid(chosen, false)
+        if (scEdit) {
+            val h = TextView(this)
+            h.text = "Eklenebilir (dokun → ekle)"
+            h.textSize = 11f
+            h.setTextColor(ACCENT)
+            h.setPadding(0, dp(8), 0, 0)
+            body.addView(h)
+            grid(cat.map { it.first }.filter { !chosen.contains(it) }, true)
+        }
+    }
+
+    private fun closeShortcuts() {
+        val w = scWin ?: return
+        try {
+            wm.removeView(w)
+        } catch (e: Exception) {
+        }
+        scWin = null
+        scBody = null
+        scEdit = false
+        prefs().edit().putBoolean("scOpen", false).apply()
+    }
+
+    private fun toggleShortcuts() {
+        if (scWin != null) {
+            closeShortcuts()
+            return
+        }
+        refreshScreen()
+        val width = dp(200)
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.background = rounded(PANEL_BG, 14)
+        box.setPadding(dp(8), dp(4), dp(8), dp(8))
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        val title = TextView(this)
+        title.text = "⠿ Kısayollar"
+        title.textSize = 13f
+        title.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        title.setTextColor(ACCENT)
+        head.addView(title, LinearLayout.LayoutParams(0, dp(34), 1f).also { it.gravity = Gravity.CENTER_VERTICAL })
+        title.gravity = Gravity.CENTER_VERTICAL
+        val eb = mkBtn("✎") {
+            scEdit = !scEdit
+            scRender()
+        }
+        head.addView(eb, LinearLayout.LayoutParams(dp(34), dp(30)))
+        val cb = mkBtn("✕") { closeShortcuts() }
+        head.addView(cb, LinearLayout.LayoutParams(dp(34), dp(30)).also { it.leftMargin = dp(4) })
+        box.addView(head)
+        val body = LinearLayout(this)
+        body.orientation = LinearLayout.VERTICAL
+        box.addView(body)
+        scBody = body
+
+        val lp = overlayParams(width)
+        lp.x = prefs().getInt("scx", (screenW * 0.05f).toInt()).coerceIn(0, maxOf(0, screenW - width))
+        lp.y = prefs().getInt("scy", (screenH * 0.40f).toInt()).coerceIn(0, maxOf(0, screenH - dp(100)))
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        val drag = View.OnTouchListener { _, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX
+                    downY = ev.rawY
+                    startX = lp.x
+                    startY = lp.y
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    lp.x = (startX + (ev.rawX - downX)).toInt().coerceIn(0, maxOf(0, screenW - box.width))
+                    lp.y = (startY + (ev.rawY - downY)).toInt().coerceIn(0, maxOf(0, screenH - box.height))
+                    try {
+                        wm.updateViewLayout(box, lp)
+                    } catch (e: Exception) {
+                    }
+                }
+                MotionEvent.ACTION_UP -> prefs().edit().putInt("scx", lp.x).putInt("scy", lp.y).apply()
+            }
+            true
+        }
+        title.setOnTouchListener(drag)
+        box.setOnTouchListener(drag)
+        wm.addView(box, lp)
+        scWin = box
+        scLp = lp
+        scEdit = false
+        prefs().edit().putBoolean("scOpen", true).apply()
+        scRender()
     }
 
     // ------------------------------------------------------------------ telefon bildirimi ve uzaktan sorgu (ntfy)
