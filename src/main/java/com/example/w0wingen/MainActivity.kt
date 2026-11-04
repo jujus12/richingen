@@ -363,10 +363,12 @@ class MainActivity : Activity() {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(if (n == active) (ACCENT and 0x00FFFFFF) or 0x44000000 else INPUT, 12)
+            row.setPadding(dp(12), dp(6), dp(8), dp(6))
             val t = TextView(this)
-            t.text = n + (if (n == active) "  ✓" else "")
+            t.text = (if (n == active) "● " else "○ ") + n
             t.textSize = 15f
-            t.setTextColor(Color.WHITE)
+            t.setTextColor(if (n == active) ACCENT else Color.WHITE)
             row.addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val load = button("Yükle", false)
             load.setOnClickListener {
@@ -383,7 +385,7 @@ class MainActivity : Activity() {
             val dl = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT)
             dl.leftMargin = dp(6)
             row.addView(del, dl)
-            profBox.addView(row, lp(dp(6)))
+            profBox.addView(row, lp(dp(8)))
         }
     }
 
