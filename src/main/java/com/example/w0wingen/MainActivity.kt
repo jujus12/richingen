@@ -121,22 +121,31 @@ class MainActivity : Activity() {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(16), dp(24), dp(16), dp(24))
 
+        val gem = TextView(this)
+        gem.text = "◆"
+        gem.textSize = 16f
+        gem.gravity = Gravity.CENTER
+        gem.setTextColor(0xFFA03CF0.toInt())
+        col.addView(gem)
         val title = TextView(this)
-        title.text = "W0wingen"
-        title.textSize = 28f
-        title.typeface = Typeface.DEFAULT_BOLD
-        title.setTextColor(ACCENT)
+        title.text = "RICHINGEN"
+        title.textSize = 30f
+        title.letterSpacing = 0.14f
+        title.gravity = Gravity.CENTER
+        title.typeface = Typeface.SERIF
+        title.setTextColor(0xFFC9ADEB.toInt())
         col.addView(title)
         val sub = TextView(this)
-        sub.text = "MU Immortal · boss doğma süresi takibi ve otomasyon"
+        sub.text = "MU Immortal · boss takibi ve otomasyon"
         sub.textSize = 13f
+        sub.gravity = Gravity.CENTER
         sub.setTextColor(DIM)
-        sub.setPadding(0, 0, 0, dp(14))
+        sub.setPadding(0, dp(2), 0, dp(14))
         col.addView(sub)
 
         val profCard = card(col, "Profiller")
         val profHint = TextView(this)
-        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Oto sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
+        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Merkez sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
         profHint.textSize = 11f
         profHint.setTextColor(DIM)
         profCard.addView(profHint)
@@ -396,12 +405,13 @@ class MainActivity : Activity() {
     private fun card(parent: LinearLayout, heading: String): LinearLayout {
         val c = LinearLayout(this)
         c.orientation = LinearLayout.VERTICAL
-        c.background = rounded(CARD, 16)
-        c.setPadding(dp(14), dp(12), dp(14), dp(12))
+        c.background = TimerService_frame(CARD, 16)
+        c.setPadding(dp(18), dp(16), dp(18), dp(14))
         val h = TextView(this)
         h.textSize = 16f
-        h.typeface = Typeface.DEFAULT_BOLD
-        h.setTextColor(ACCENT)
+        h.letterSpacing = 0.05f
+        h.typeface = Typeface.SERIF
+        h.setTextColor(0xFFC9ADEB.toInt())
         h.setPadding(0, dp(2), 0, dp(2))
         val body = LinearLayout(this)
         body.orientation = LinearLayout.VERTICAL
@@ -424,14 +434,21 @@ class MainActivity : Activity() {
         return body
     }
 
+    private fun TimerService_frame(color: Int, r: Int): android.graphics.drawable.Drawable =
+        GothicFrame(color, dp(r).toFloat(), resources.displayMetrics.density)
+
     private fun button(text: String, primary: Boolean): Button {
         val b = Button(this)
         b.text = text
         b.isAllCaps = false
         b.textSize = 14f
         b.typeface = Typeface.DEFAULT_BOLD
-        b.setTextColor(if (primary) 0xFF04202D.toInt() else Color.WHITE)
-        b.background = rounded(if (primary) ACCENT else INPUT, 12)
+        b.setTextColor(Color.WHITE)
+        val bg = GradientDrawable()
+        bg.cornerRadius = dp(12).toFloat()
+        bg.setColor(if (primary) 0xFF5B2A96.toInt() else INPUT)
+        bg.setStroke(dp(1), if (primary) ACCENT else 0xFF332D40.toInt())
+        b.background = bg
         b.minHeight = dp(46)
         b.minimumHeight = dp(46)
         return b

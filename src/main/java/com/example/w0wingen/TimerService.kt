@@ -204,7 +204,8 @@ class TimerService : AccessibilityService() {
             Triple("goldOn", "Golden", false),
             Triple("redOn", "Red boss", false),
             Triple("routeOn", "Rota", false),
-            Triple("idleFarmOn", "Boşta farm", false)
+            Triple("idleFarmOn", "Boşta farm", false),
+            Triple("macroTpOn", "Kayıtlı ışın", false)
         )
 
         /** Kayıtlı tema numarası; Gotik temaya bir kez otomatik geçilir. */
@@ -1615,7 +1616,21 @@ class TimerService : AccessibilityService() {
         gameAuto = false
     }
 
+    /** Haritaya ışınlanma kaydı varsa ve "Kayıtlı ışın" açıksa true. */
+    private fun tpMacroOn(map: String): Boolean = cfgB("macroTpOn", false) && macroHas("tp_" + map)
+
     private fun teleport(map: String) {
+        if (tpMacroOn(map)) {
+            say("Işınlanılıyor (kayıtlı): " + map)
+            playMacro("tp_" + map)
+            lastLink = "link_" + map
+            goldHere = false
+            redHere = false
+            routeAt = false
+            gameAuto = false
+            pause(cfgI("mapTravel", 10) * 1000)
+            return
+        }
         val link = "link_" + map
         val need = ArrayList<String>()
         for (n in listOf("chat", "pmTab", link)) if (!hasPt(n)) need.add(n)
@@ -1934,7 +1949,7 @@ class TimerService : AccessibilityService() {
         if (on("routeOn")) {
             for (rm in routeSnapshot()) {
                 val l = "link_" + rm
-                if (!hasPt(l) && !need.contains(l)) need.add(l)
+                if (!hasPt(l) && !tpMacroOn(rm) && !need.contains(l)) need.add(l)
                 if (mapInfo(rm).wires > 1) {
                     for (w in 1..mapInfo(rm).wires) {
                         val n = "wire" + w
@@ -1948,7 +1963,7 @@ class TimerService : AccessibilityService() {
         for (e in snapshot()) maps.add(e.map)
         for (m in maps) {
             val l = "link_" + m
-            if (!hasPt(l) && !need.contains(l)) need.add(l)
+            if (!hasPt(l) && !tpMacroOn(m) && !need.contains(l)) need.add(l)
             if (mapInfo(m).wires > 1) {
                 for (w in 1..mapInfo(m).wires) {
                     val n = "wire" + w
@@ -2355,20 +2370,9 @@ class TimerService : AccessibilityService() {
         return g
     }
 
-    /** Gotik çift çerçeve: dışta gri-gümüş, içte mor ince hat. */
-    private fun framed(color: Int, r: Int): android.graphics.drawable.Drawable {
-        val outer = GradientDrawable()
-        outer.setColor(color)
-        outer.cornerRadius = dp(r).toFloat()
-        outer.setStroke(dp(2), 0xFF5A5468.toInt())
-        val inner = GradientDrawable()
-        inner.setColor(Color.TRANSPARENT)
-        inner.cornerRadius = dp(r - 4).toFloat()
-        inner.setStroke(dp(1), 0xFF6A3FA8.toInt())
-        val ld = android.graphics.drawable.LayerDrawable(arrayOf(outer, inner))
-        ld.setLayerInset(1, dp(5), dp(5), dp(5), dp(5))
-        return ld
-    }
+    /** Gotik çift çerçeve: gümüş-gri dış hat, mor iç hat, köşe süsleri ve üstte mor taş. */
+    private fun framed(color: Int, r: Int): android.graphics.drawable.Drawable =
+        GothicFrame(color, dp(r).toFloat(), resources.displayMetrics.density)
 
     /** Açık düğme dolgusu: vurgu renginin canlı koyu tonu. */
     private fun onFill(): Int {
@@ -2659,7 +2663,7 @@ class TimerService : AccessibilityService() {
         // KONTROL MERKEZİ: açık/kapalı kutuları ve eylemler
         val icons = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin"
         )
         fun tileRow(items: List<Triple<String, String, Pair<Boolean?, () -> Unit>>>) {
             for (chunk in items.chunked(3)) {
@@ -2853,18 +2857,12 @@ class TimerService : AccessibilityService() {
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
         outer.background = framed(PANEL_BG, 18)
-        outer.setPadding(dp(16), dp(12), dp(16), dp(16))
+        outer.setPadding(dp(16), dp(20), dp(16), dp(18))
 
         // başlık
         val head = LinearLayout(this)
         head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
-        val gem = TextView(this)
-        gem.text = "◆"
-        gem.textSize = 14f
-        gem.gravity = Gravity.CENTER
-        gem.setTextColor(0xFFA03CF0.toInt())
-        outer.addView(gem, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         val title = TextView(this)
         title.text = "RICHINGEN"
         title.textSize = 19f
@@ -3046,7 +3044,8 @@ class TimerService : AccessibilityService() {
         tb.addView(mkBtn("Sayacı sıfırla") { resetStats() }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
         boxMaintBtns.addView(r2, rlp)
         val boxMacro = sect(tabMaint, "KAYITLI İŞLEMLER (kaydedersen bot bunları oynatır)")
-        for ((k, v) in macroNames) {
+        fun macroRow(parent: LinearLayout, k: String, v: String) {
+            macroBase[k] = v
             val mr = LinearLayout(this)
             mr.orientation = LinearLayout.HORIZONTAL
             mr.gravity = Gravity.CENTER_VERTICAL
@@ -3069,8 +3068,11 @@ class TimerService : AccessibilityService() {
                 bl.leftMargin = dp(4)
                 mr.addView(b, bl)
             }
-            boxMacro.addView(mr, rlp)
+            parent.addView(mr, rlp)
         }
+        for ((k, v) in macroNames) macroRow(boxMacro, k, v)
+        val boxTp = sect(tabMaint, "HARİTA IŞINLANMA KAYITLARI (Merkez'deki \"Kayıtlı ışın\" açıkken bot haritaya bu kayıtla gider; kayıt yoksa ya da kapalıysa chat'ten gider)")
+        for (m in maps()) macroRow(boxTp, "tp_" + m.name, m.name)
         refreshMacroLabels()
 
         // buff eşikleri panelden ayarlanır
@@ -3310,7 +3312,15 @@ class TimerService : AccessibilityService() {
         val homeScroll = ScrollView(this)
         homeScroll.addView(tabHome)
         val tabNames = listOf("Merkez", "Boss", "İşaret", "Bakım", "Araç")
-        val tabViews = listOf<View>(homeScroll, tabBoss, tabMark, tabMaint, tabTools)
+        fun scrolled(v: LinearLayout): ScrollView {
+            val sv = ScrollView(this)
+            sv.addView(v)
+            return sv
+        }
+        val markScroll = scrolled(tabMark)
+        val maintScroll = scrolled(tabMaint)
+        val toolsScroll = scrolled(tabTools)
+        val tabViews = listOf<View>(homeScroll, tabBoss, markScroll, maintScroll, toolsScroll)
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
         tabBar.orientation = LinearLayout.HORIZONTAL
@@ -3338,9 +3348,10 @@ class TimerService : AccessibilityService() {
         outer.addView(tabBar, tbl)
         outer.addView(homeScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
         outer.addView(tabBoss)
-        outer.addView(tabMark)
-        outer.addView(tabMaint)
-        outer.addView(tabTools)
+        val tabH = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt())
+        outer.addView(markScroll, tabH)
+        outer.addView(maintScroll, LinearLayout.LayoutParams(tabH))
+        outer.addView(toolsScroll, LinearLayout.LayoutParams(tabH))
         buildHome(tabHome)
         if (!prefs().getBoolean("tabs5", false)) prefs().edit().putInt("tab", 0).putBoolean("tabs5", true).apply()
         showTab(prefs().getInt("tab", 0).coerceIn(0, 4))
@@ -5117,6 +5128,7 @@ class TimerService : AccessibilityService() {
 
     private val macroNames = listOf(Pair("recycle", "Recycle"), Pair("pothp", "HP pot al"), Pair("potmp", "MP pot al"))
     private val macroLabels = HashMap<String, TextView>()
+    private val macroBase = HashMap<String, String>()
     private var recOverlay: View? = null
     private var recLp: WindowManager.LayoutParams? = null
     private var recBar: LinearLayout? = null
@@ -5156,9 +5168,9 @@ class TimerService : AccessibilityService() {
     private fun macroHas(name: String): Boolean = macroLoad(name).isNotEmpty()
 
     private fun refreshMacroLabels() {
-        for ((k, v) in macroNames) {
+        for ((k, lbl) in macroLabels) {
             val n = macroLoad(k).size
-            macroLabels[k]?.text = v + (if (n > 0) "  ·  " + n + " adım" else "  ·  kayıt yok")
+            lbl.text = (macroBase[k] ?: k) + (if (n > 0) "  ·  " + n + " adım" else "  ·  kayıt yok")
         }
     }
 
@@ -5963,7 +5975,7 @@ class TimerService : AccessibilityService() {
         l.add(ScItem("sw", "Kronometre", "stopwatch") { toggleStopwatch() })
         val ic = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin"
         )
         for (t in TOGGLES) l.add(ScItem("t:" + t.first, t.second, ic[t.first] ?: "dice") {
             prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
@@ -6536,6 +6548,15 @@ class IconView(context: android.content.Context, private val kind: String, priva
                 a.op(b, Path.Op.DIFFERENCE)
                 c.drawPath(a, line)
             }
+            "pin" -> {
+                p.moveTo(12f, 21.5f)
+                p.cubicTo(5f, 14f, 5f, 11f, 5f, 9.5f)
+                p.arcTo(android.graphics.RectF(5f, 2.5f, 19f, 16.5f), 180f, 180f)
+                p.cubicTo(19f, 11f, 19f, 14f, 12f, 21.5f)
+                p.close()
+                c.drawPath(p, line)
+                c.drawCircle(12f, 9.5f, 2.6f, line)
+            }
             "pause" -> {
                 c.drawRoundRect(android.graphics.RectF(6.5f, 4.5f, 10.5f, 19.5f), 1.4f, 1.4f, fill)
                 c.drawRoundRect(android.graphics.RectF(13.5f, 4.5f, 17.5f, 19.5f), 1.4f, 1.4f, fill)
@@ -6592,4 +6613,68 @@ class IconView(context: android.content.Context, private val kind: String, priva
         }
         c.restore()
     }
+}
+
+/** Gotik panel çerçevesi: çift hat, köşe süsleri, üstte ve altta mor taş. */
+class GothicFrame(private val fillColor: Int, private val radius: Float, private val d: Float) : android.graphics.drawable.Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    override fun draw(c: Canvas) {
+        val b = bounds
+        val l = b.left.toFloat()
+        val t = b.top.toFloat()
+        val r = b.right.toFloat()
+        val bt = b.bottom.toFloat()
+        paint.style = Paint.Style.FILL
+        paint.color = fillColor
+        c.drawRoundRect(android.graphics.RectF(l, t, r, bt), radius, radius, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f * d
+        paint.color = 0xFF5A5468.toInt()
+        c.drawRoundRect(android.graphics.RectF(l + d, t + d, r - d, bt - d), radius, radius, paint)
+        paint.strokeWidth = d
+        paint.color = 0xFF6A3FA8.toInt()
+        c.drawRoundRect(android.graphics.RectF(l + 5 * d, t + 5 * d, r - 5 * d, bt - 5 * d), maxOf(2f, radius - 4 * d), maxOf(2f, radius - 4 * d), paint)
+        // köşe süsleri: elmas ve iki kısa kol
+        paint.color = 0xFF9A93AD.toInt()
+        for (sx in listOf(-1f, 1f)) for (sy in listOf(-1f, 1f)) {
+            val cx = if (sx < 0) l + 11 * d else r - 11 * d
+            val cy = if (sy < 0) t + 11 * d else bt - 11 * d
+            val path = Path()
+            path.moveTo(cx, cy - 3.5f * d); path.lineTo(cx + 3.5f * d, cy); path.lineTo(cx, cy + 3.5f * d); path.lineTo(cx - 3.5f * d, cy); path.close()
+            paint.style = Paint.Style.FILL
+            c.drawPath(path, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = d
+            c.drawLine(cx + sx * 5f * d, cy, cx + sx * 18f * d, cy, paint)
+            c.drawLine(cx, cy + sy * 5f * d, cx, cy + sy * 18f * d, paint)
+        }
+        gem(c, (l + r) / 2f, t + 5 * d, 6f * d)
+        gem(c, (l + r) / 2f, bt - 5 * d, 4.5f * d)
+    }
+
+    private fun gem(c: Canvas, cx: Float, cy: Float, h: Float) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = d
+        paint.color = 0xFF9A93AD.toInt()
+        for (sx in listOf(-1f, 1f)) {
+            val w = Path()
+            w.moveTo(cx + sx * (h + 3 * d), cy)
+            w.quadTo(cx + sx * (h + 18 * d), cy - 4 * d, cx + sx * (h + 34 * d), cy)
+            c.drawPath(w, paint)
+        }
+        val g = Path()
+        g.moveTo(cx, cy - h); g.lineTo(cx + h * 0.8f, cy); g.lineTo(cx, cy + h); g.lineTo(cx - h * 0.8f, cy); g.close()
+        paint.style = Paint.Style.FILL
+        paint.color = 0xFF8A35D8.toInt()
+        c.drawPath(g, paint)
+        paint.style = Paint.Style.STROKE
+        paint.color = 0xFFD9C4F2.toInt()
+        c.drawPath(g, paint)
+    }
+
+    override fun setAlpha(alpha: Int) {}
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) {}
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 }
