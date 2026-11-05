@@ -202,11 +202,8 @@ class TimerService : AccessibilityService() {
             Triple("buffOn", "Buff", false),
             Triple("randomOn", "Random", true),
             Triple("goldOn", "Golden", false),
-            Triple("goldRandomOn", "G·Rnd", false),
             Triple("redOn", "Red boss", false),
-            Triple("redRandomOn", "R·Rnd", false),
             Triple("routeOn", "Rota", false),
-            Triple("routeRandomOn", "Rota Rnd", false),
             Triple("idleFarmOn", "Boşta farm", false)
         )
 
@@ -514,7 +511,8 @@ class TimerService : AccessibilityService() {
     private fun prefs() = getSharedPreferences("w0wingen", Context.MODE_PRIVATE)
 
     private fun cfgF(key: String, def: Float): Float =
-        prefs().getString("cfg_" + key, null)?.toFloatOrNull() ?: def
+        if (key == "goldRadius" || key == "redRadius" || key == "routeRadius") (prefs().getString("cfg_radius", null)?.toFloatOrNull() ?: 200f)
+        else prefs().getString("cfg_" + key, null)?.toFloatOrNull() ?: def
 
     private fun cfgI(key: String, def: Int): Int = cfgF(key, def.toFloat()).toInt()
 
@@ -528,7 +526,8 @@ class TimerService : AccessibilityService() {
         return true
     }
 
-    private fun on(key: String): Boolean = cfgB(key, toggleDef(key))
+    private fun on(key: String): Boolean =
+        if (key == "goldRandomOn" || key == "redRandomOn" || key == "routeRandomOn") cfgB("randomOn", true) else cfgB(key, toggleDef(key))
 
     private fun hasPt(name: String): Boolean = prefs().contains(name + "_x") || DEFAULTS.containsKey(name)
 
@@ -2659,30 +2658,20 @@ class TimerService : AccessibilityService() {
 
         // KONTROL MERKEZİ: açık/kapalı kutuları ve eylemler
         val icons = mapOf(
-            "potOn" to "⚗", "recycleOn" to "↻", "farmOn" to "☠", "impOn" to "Ψ", "angelOn" to "✦", "reviveOn" to "♥",
-            "buffOn" to "▲", "randomOn" to "⚄", "goldOn" to "★", "goldRandomOn" to "◎", "redOn" to "◆", "redRandomOn" to "◎",
-            "routeOn" to "➤", "routeRandomOn" to "◎", "idleFarmOn" to "☾"
+            "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon"
         )
         fun tileRow(items: List<Triple<String, String, Pair<Boolean?, () -> Unit>>>) {
             for (chunk in items.chunked(3)) {
                 val row = LinearLayout(this)
                 row.orientation = LinearLayout.HORIZONTAL
                 for ((j, it) in chunk.withIndex()) {
-                    val state = it.third.first
-                    val tile = TextView(this)
-                    tile.text = it.first + "\uFE0E\n" + it.second
-                    tile.textSize = 11f
-                    tile.gravity = Gravity.CENTER
-                    tile.typeface = android.graphics.Typeface.DEFAULT_BOLD
-                    tile.setTextColor(if (state == false) TEXT_DIM else Color.WHITE)
-                    tile.background = if (state == true) card(onFill(), 14, ACCENT) else card(CARD_BG, 14, 0xFF332D40.toInt())
-                    val act = it.third.second
-                    tile.setOnClickListener { act() }
-                    val tl = LinearLayout.LayoutParams(0, dp(56), 1f)
+                    val tile = mkTile(it.first, it.second, it.third.first, dp(72), it.third.second)
+                    val tl = LinearLayout.LayoutParams(0, dp(72), 1f)
                     if (j > 0) tl.leftMargin = dp(5)
                     row.addView(tile, tl)
                 }
-                for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(56), 1f).also { it.leftMargin = dp(5) })
+                for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(72), 1f).also { it.leftMargin = dp(5) })
                 box.addView(row, lpTop())
             }
         }
@@ -2694,7 +2683,7 @@ class TimerService : AccessibilityService() {
         cc.setPadding(0, dp(10), 0, 0)
         box.addView(cc)
         tileRow(TOGGLES.map { t ->
-            Triple(icons[t.first] ?: "•", t.second, Pair<Boolean?, () -> Unit>(on(t.first)) {
+            Triple(icons[t.first] ?: "dice", t.second, Pair<Boolean?, () -> Unit>(on(t.first)) {
                 prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
                 updateToggles()
             })
@@ -2708,15 +2697,19 @@ class TimerService : AccessibilityService() {
         box.addView(ac)
         fun act(icon: String, label: String, f: () -> Unit) = Triple(icon, label, Pair<Boolean?, () -> Unit>(null, f))
         tileRow(listOf(
-            act("❚❚", "Durdur") { stopJob() },
-            act("⚗", "Pot kontrol") { runManual { doPots() } },
-            act("↻", "Recycle") { runManual { doRecycle() } },
-            act("▲", "Buff") { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } },
-            act("✦", "Angel") { quickTap("angel") },
-            act("☠", "Farma git") { runManual { doFarm() } },
-            act("☰", "Kısayollar") { toggleShortcuts() },
-            act("◔", "Kronometre") { toggleStopwatch() },
-            act("✎", "Zaman kaydet") { addStamp() }
+            act("pause", "Durdur") { stopJob() },
+            act("sword", "Oto atak") { quickTap("autoAtk") },
+            act("shield", "Kalkan") { quickTap("shield") },
+            act("pot", "Pot kontrol") { runManual { doPots() } },
+            act("recycle", "Recycle") { runManual { doRecycle() } },
+            act("buff", "Buff") { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } },
+            act("angel", "Angel") { quickTap("angel") },
+            act("skull", "Farma git") { runManual { doFarm() } },
+            act("target", "Canlı kaydet") { runManual { doSaveAlive() } },
+            act("list", "Kısayollar") { toggleShortcuts() },
+            act("stopwatch", "Kronometre") { toggleStopwatch() },
+            act("pen", "Zaman kaydet") { addStamp() },
+            act("gear", "Ayar") { toggleMenu() }
         ))
 
         if (on("farmOn")) {
@@ -2727,22 +2720,19 @@ class TimerService : AccessibilityService() {
         if (on("routeOn")) {
             head("ROTA")
             buttons(listOf<Pair<String, () -> Unit>>("Rota listesi" to { toggleRouteWin() }, "Gizli nokta" to { runManual { hiddenMark() } }, "Yoksay" to { runManual { ignoreMark() } }, "Canlı boss kaydet" to { runManual { doSaveAlive() } }))
-            if (on("routeRandomOn")) step("Rota Random yarıçap (px)", "routeRadius", 150, 0, 1000) { 25 }
         }
         if (on("goldOn")) {
             head("GOLDEN")
             buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
             step("Golden wire'ı", "goldWire", 3, 1, 3) { 1 }
-            if (on("goldRandomOn")) step("Golden Random yarıçap (px)", "goldRadius", 150, 0, 1000) { 25 }
         }
         if (on("redOn")) {
             head("RED BOSS")
             buttons(listOf<Pair<String, () -> Unit>>("Red işaretle" to { runManual { redMark() } }, "Red listesi" to { toggleRedWin() }))
-            if (on("redRandomOn")) step("Red Random yarıçap (px)", "redRadius", 150, 0, 1000) { 25 }
         }
         if (on("randomOn")) {
-            head("BOSSA GİDİŞ")
-            step("Random yarıçap (px)", "radius", 200, 0, 1000) { 25 }
+            head("RANDOM")
+            step("Random yarıçap (px) · tüm modlar", "radius", 200, 0, 1000) { 25 }
         }
         applyFont(box)
     }
@@ -2774,11 +2764,49 @@ class TimerService : AccessibilityService() {
     }
 
     /** Tutamacı ve paneli konumlar: panel tutamacın bulunduğu tarafa göre soluna ya da sağına açılır. */
+    /** Büyük çizgi simgeli kutu: durum verilirse köşede mor anahtar gösterir. */
+    private fun mkTile(icon: String, label: String, state: Boolean?, h: Int, act: () -> Unit): View {
+        val fl = FrameLayout(this)
+        val on = state == true
+        fl.background = if (on) card(0xFF241536.toInt(), 14, 0xFF8E4DD6.toInt()) else card(CARD_BG, 14, 0xFF332D40.toInt())
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        col.gravity = Gravity.CENTER
+        val iv = IconView(this, icon, if (state == false) 0xFF8D8798.toInt() else Color.WHITE)
+        col.addView(iv, LinearLayout.LayoutParams(dp(30), dp(30)))
+        val tv = TextView(this)
+        tv.text = label
+        tv.textSize = 11f
+        tv.gravity = Gravity.CENTER
+        tv.maxLines = 1
+        tv.setTextColor(if (state == false) TEXT_DIM else Color.WHITE)
+        col.addView(tv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(3) })
+        fl.addView(col, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        if (state != null) {
+            val pill = FrameLayout(this)
+            pill.background = rounded(if (on) 0xFF7B33C8.toInt() else 0xFF3A3544.toInt(), 8)
+            val knob = View(this)
+            knob.background = rounded(Color.WHITE, 8)
+            pill.addView(knob, FrameLayout.LayoutParams(dp(9), dp(9)).also {
+                it.gravity = (if (on) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
+                it.leftMargin = dp(2)
+                it.rightMargin = dp(2)
+            })
+            fl.addView(pill, FrameLayout.LayoutParams(dp(24), dp(14)).also {
+                it.gravity = Gravity.TOP or Gravity.END
+                it.topMargin = dp(5)
+                it.rightMargin = dp(5)
+            })
+        }
+        fl.setOnClickListener { act() }
+        return fl
+    }
+
     /** Tüm panelde tek yazı tipi: kısık, ince çizgili sans. */
     private fun applyFont(v: View) {
         if (v is TextView && v.tag != "serif") {
             val bold = v.typeface?.isBold == true
-            v.typeface = android.graphics.Typeface.create("sans-serif-condensed", if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+            v.typeface = android.graphics.Typeface.create("sans-serif-medium", if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
         }
         if (v is ViewGroup) for (i in 0 until v.childCount) applyFont(v.getChildAt(i))
     }
@@ -2996,7 +3024,7 @@ class TimerService : AccessibilityService() {
         pbl.topMargin = dp(6)
         tabAuto.addView(pb, pbl)
         updateProfileBtn()
-        togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "goldRandomOn", "redOn", "redRandomOn", "routeOn", "routeRandomOn", "idleFarmOn", "randomOn"))
+        togGroup(tabAuto, "MOD", listOf("farmOn", "goldOn", "redOn", "routeOn", "idleFarmOn", "randomOn"))
         togGroup(tabMaint, "BAKIM", listOf("potOn", "recycleOn", "buffOn"))
         togGroup(tabAuto, "SAVAŞ", listOf("impOn", "angelOn", "reviveOn"))
 
@@ -3206,7 +3234,6 @@ class TimerService : AccessibilityService() {
         gq.addView(mkBtn("−") { changeGoldRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         gq.addView(gqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         gq.addView(mkBtn("+") { changeGoldRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-        boxGold.addView(gq, rlp)
         val rq = LinearLayout(this)
         rq.orientation = LinearLayout.HORIZONTAL
         rq.gravity = Gravity.CENTER_VERTICAL
@@ -3224,7 +3251,6 @@ class TimerService : AccessibilityService() {
         rq.addView(mkBtn("−") { changeRedRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         rq.addView(rqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         rq.addView(mkBtn("+") { changeRedRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-        boxRed.addView(rq, rlp)
         val tq = LinearLayout(this)
         tq.orientation = LinearLayout.HORIZONTAL
         tq.gravity = Gravity.CENTER_VERTICAL
@@ -3242,7 +3268,6 @@ class TimerService : AccessibilityService() {
         tq.addView(mkBtn("−") { changeRouteRadius(-25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
         tq.addView(tqv, LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.WRAP_CONTENT))
         tq.addView(mkBtn("+") { changeRouteRadius(25) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-        boxRoute.addView(tq, rlp)
         val gr = LinearLayout(this)
         gr.orientation = LinearLayout.HORIZONTAL
         gr.gravity = Gravity.CENTER_VERTICAL
@@ -5941,25 +5966,32 @@ class TimerService : AccessibilityService() {
         }.start()
     }
 
-    /** Eklenebilir kısayollar: anahtar, yazı, eylem. "t:" ile başlayanlar açık/kapalı düğmeleridir. */
-    private fun scCatalog(): List<Triple<String, String, () -> Unit>> {
-        val l = ArrayList<Triple<String, String, () -> Unit>>()
-        l.add(Triple("pot", "Pot", { runManual { doPots() } }))
-        l.add(Triple("recycle", "Recycle", { runManual { doRecycle() } }))
-        l.add(Triple("buff", "Buff", { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } }))
-        l.add(Triple("angel", "Angel", { quickTap("angel") }))
-        l.add(Triple("autoAtk", "Oto atak", { quickTap("autoAtk") }))
-        l.add(Triple("shield", "Kalkan", { quickTap("shield") }))
-        l.add(Triple("imp", "Imp", { quickTap("imp") }))
-        l.add(Triple("revive", "Diril", { quickTap("revive") }))
-        l.add(Triple("farm", "Farma git", { runManual { doFarm() } }))
-        l.add(Triple("stop", "Durdur", { stopJob() }))
-        l.add(Triple("stamp", "Zaman kaydet", { addStamp() }))
-        l.add(Triple("sw", "Kronometre", { toggleStopwatch() }))
-        for (t in TOGGLES) l.add(Triple("t:" + t.first, t.second, {
+    private class ScItem(val key: String, val label: String, val icon: String, val act: () -> Unit)
+
+    /** Eklenebilir kısayollar. "t:" ile başlayanlar açık/kapalı düğmeleridir. */
+    private fun scCatalog(): List<ScItem> {
+        val l = ArrayList<ScItem>()
+        l.add(ScItem("pot", "Pot", "pot") { runManual { doPots() } })
+        l.add(ScItem("recycle", "Recycle", "recycle") { runManual { doRecycle() } })
+        l.add(ScItem("buff", "Buff", "buff") { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } })
+        l.add(ScItem("angel", "Angel", "angel") { quickTap("angel") })
+        l.add(ScItem("autoAtk", "Oto atak", "sword") { quickTap("autoAtk") })
+        l.add(ScItem("shield", "Kalkan", "shield") { quickTap("shield") })
+        l.add(ScItem("imp", "Imp", "imp") { quickTap("imp") })
+        l.add(ScItem("revive", "Diril", "heart") { quickTap("revive") })
+        l.add(ScItem("farm", "Farma git", "skull") { runManual { doFarm() } })
+        l.add(ScItem("stop", "Durdur", "pause") { stopJob() })
+        l.add(ScItem("alive", "Canlı kaydet", "target") { runManual { doSaveAlive() } })
+        l.add(ScItem("stamp", "Zaman kaydet", "pen") { addStamp() })
+        l.add(ScItem("sw", "Kronometre", "stopwatch") { toggleStopwatch() })
+        val ic = mapOf(
+            "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon"
+        )
+        for (t in TOGGLES) l.add(ScItem("t:" + t.first, t.second, ic[t.first] ?: "dice") {
             prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
             updateToggles()
-        }))
+        })
         return l
     }
 
@@ -5967,20 +5999,17 @@ class TimerService : AccessibilityService() {
         val body = scBody ?: return
         body.removeAllViews()
         val cat = scCatalog()
-        val chosen = scList().filter { k -> cat.any { it.first == k } }
-        val full = LinearLayout.LayoutParams.MATCH_PARENT
-        val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
+        val chosen = scList().filter { k -> cat.any { it.key == k } }
         fun grid(keys: List<String>, add: Boolean) {
-            for (chunk in keys.chunked(2)) {
+            for (chunk in keys.chunked(3)) {
                 val row = LinearLayout(this)
                 row.orientation = LinearLayout.HORIZONTAL
                 for ((j, k) in chunk.withIndex()) {
-                    val c = cat.first { it.first == k }
+                    val c = cat.first { it.key == k }
                     val isTog = k.startsWith("t:")
-                    val isOn = isTog && on(k.substring(2))
-                    val label = if (add) "＋ " + c.second else if (scEdit) "✕ " + c.second else if (isTog) c.second + (if (isOn) " ✓" else " ✗") else c.second
-                    val bg = if (add) CARD_BG else if (isTog) (if (isOn) onFill() else MISSING_BG) else CARD_BG
-                    val bt = mkBtn(label, bg) {
+                    val state: Boolean? = if (isTog && !scEdit && !add) on(k.substring(2)) else null
+                    val label = if (add) "＋ " + c.label else if (scEdit) "✕ " + c.label else c.label
+                    val tile = mkTile(c.icon, label, state, dp(64)) {
                         if (add) {
                             val l = scList()
                             if (!l.contains(k)) l.add(k)
@@ -5992,17 +6021,16 @@ class TimerService : AccessibilityService() {
                             scSave(l)
                             scRender()
                         } else {
-                            c.third()
+                            c.act()
                             if (isTog) scRender()
                         }
                     }
-                    bt.textSize = 12f
-                    val bl = LinearLayout.LayoutParams(0, dp(38), 1f)
-                    if (j > 0) bl.leftMargin = dp(4)
-                    row.addView(bt, bl)
+                    val tl = LinearLayout.LayoutParams(0, dp(64), 1f)
+                    if (j > 0) tl.leftMargin = dp(4)
+                    row.addView(tile, tl)
                 }
-                if (chunk.size == 1) row.addView(View(this), LinearLayout.LayoutParams(0, dp(38), 1f).also { it.leftMargin = dp(4) })
-                val rl = LinearLayout.LayoutParams(full, wrap)
+                for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(64), 1f).also { it.leftMargin = dp(4) })
+                val rl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
                 rl.topMargin = dp(4)
                 body.addView(row, rl)
             }
@@ -6022,7 +6050,7 @@ class TimerService : AccessibilityService() {
             h.setTextColor(ACCENT)
             h.setPadding(0, dp(8), 0, 0)
             body.addView(h)
-            grid(cat.map { it.first }.filter { !chosen.contains(it) }, true)
+            grid(cat.map { it.key }.filter { !chosen.contains(it) }, true)
         }
         applyFont(body)
     }
@@ -6045,7 +6073,7 @@ class TimerService : AccessibilityService() {
             return
         }
         refreshScreen()
-        val width = dp(220)
+        val width = dp(250)
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
         box.background = framed(PANEL_BG, 16)
@@ -6399,5 +6427,192 @@ class TimerService : AccessibilityService() {
         main.postDelayed({
             if (extra === v) removeExtra()
         }, 6000)
+    }
+}
+
+/** Çizgi stilinde simgeler (24x24 ızgarada çizilir, boyuta göre ölçeklenir). */
+class IconView(context: android.content.Context, private val kind: String, private val tint: Int) : android.view.View(context) {
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    init {
+        line.style = Paint.Style.STROKE
+        line.strokeCap = Paint.Cap.ROUND
+        line.strokeJoin = Paint.Join.ROUND
+        line.color = tint
+        fill.style = Paint.Style.FILL
+        fill.color = tint
+    }
+
+    private fun arrowArc(c: Canvas, start: Float, sweep: Float) {
+        val r = android.graphics.RectF(5f, 5f, 19f, 19f)
+        c.drawArc(r, start, sweep, false, line)
+        val a = Math.toRadians((start + sweep).toDouble())
+        val ex = (12 + 7 * Math.cos(a)).toFloat()
+        val ey = (12 + 7 * Math.sin(a)).toFloat()
+        val t = a + Math.PI / 2
+        val tx = Math.cos(t).toFloat()
+        val ty = Math.sin(t).toFloat()
+        val nx = Math.cos(a).toFloat()
+        val ny = Math.sin(a).toFloat()
+        val p = Path()
+        p.moveTo(ex + tx * 3.2f, ey + ty * 3.2f)
+        p.lineTo(ex + nx * 2.6f, ey + ny * 2.6f)
+        p.moveTo(ex + tx * 3.2f, ey + ty * 3.2f)
+        p.lineTo(ex - nx * 2.6f, ey - ny * 2.6f)
+        c.drawPath(p, line)
+    }
+
+    override fun onDraw(c: Canvas) {
+        val sc = minOf(width, height) / 24f
+        c.save()
+        c.translate((width - 24f * sc) / 2f, (height - 24f * sc) / 2f)
+        c.scale(sc, sc)
+        line.strokeWidth = 1.7f
+        val p = Path()
+        when (kind) {
+            "pot" -> {
+                p.moveTo(9f, 3f); p.lineTo(15f, 3f)
+                p.moveTo(10f, 3f); p.lineTo(10f, 9f); p.lineTo(5f, 18.5f)
+                p.quadTo(4.2f, 21f, 6.8f, 21f); p.lineTo(17.2f, 21f)
+                p.quadTo(19.8f, 21f, 19f, 18.5f); p.lineTo(14f, 9f); p.lineTo(14f, 3f)
+                p.moveTo(7.5f, 15f); p.lineTo(16.5f, 15f)
+                c.drawPath(p, line)
+            }
+            "recycle" -> {
+                arrowArc(c, 200f, 140f)
+                arrowArc(c, 20f, 140f)
+            }
+            "skull" -> {
+                p.moveTo(5f, 11f)
+                p.arcTo(android.graphics.RectF(5f, 3f, 19f, 17f), 180f, 180f)
+                p.lineTo(19f, 14.5f); p.lineTo(16f, 16.5f); p.lineTo(16f, 20.5f)
+                p.lineTo(8f, 20.5f); p.lineTo(8f, 16.5f); p.lineTo(5f, 14.5f); p.close()
+                c.drawPath(p, line)
+                c.drawCircle(9.2f, 11.2f, 1.9f, fill)
+                c.drawCircle(14.8f, 11.2f, 1.9f, fill)
+                p.reset(); p.moveTo(12f, 13.5f); p.lineTo(11f, 15.5f); p.lineTo(13f, 15.5f); p.close()
+                c.drawPath(p, fill)
+                p.reset(); p.moveTo(10.5f, 18f); p.lineTo(10.5f, 20.5f); p.moveTo(13.5f, 18f); p.lineTo(13.5f, 20.5f)
+                c.drawPath(p, line)
+            }
+            "imp" -> {
+                c.drawCircle(12f, 14f, 6.5f, line)
+                p.moveTo(6.5f, 10f); p.lineTo(4f, 3f); p.lineTo(10f, 7.8f)
+                p.moveTo(17.5f, 10f); p.lineTo(20f, 3f); p.lineTo(14f, 7.8f)
+                c.drawPath(p, line)
+                c.drawCircle(9.5f, 13.5f, 1.2f, fill)
+                c.drawCircle(14.5f, 13.5f, 1.2f, fill)
+                p.reset(); p.moveTo(9.5f, 17.5f); p.quadTo(12f, 19.5f, 14.5f, 17.5f)
+                c.drawPath(p, line)
+            }
+            "angel" -> {
+                c.drawOval(android.graphics.RectF(8f, 1.8f, 16f, 5.6f), line)
+                p.moveTo(12f, 9f); p.quadTo(5f, 4.5f, 2f, 9.5f); p.quadTo(4f, 16.5f, 12f, 18f)
+                p.moveTo(12f, 9f); p.quadTo(19f, 4.5f, 22f, 9.5f); p.quadTo(20f, 16.5f, 12f, 18f)
+                p.moveTo(12f, 9f); p.lineTo(12f, 22f)
+                c.drawPath(p, line)
+            }
+            "heart" -> {
+                p.moveTo(12f, 20.5f)
+                p.cubicTo(3.5f, 14.5f, 2.5f, 9f, 5.8f, 6.3f)
+                p.cubicTo(8.3f, 4.3f, 11f, 5.8f, 12f, 8f)
+                p.cubicTo(13f, 5.8f, 15.7f, 4.3f, 18.2f, 6.3f)
+                p.cubicTo(21.5f, 9f, 20.5f, 14.5f, 12f, 20.5f)
+                p.close()
+                c.drawPath(p, line)
+            }
+            "buff" -> {
+                p.moveTo(5.5f, 12.5f); p.lineTo(12f, 6f); p.lineTo(18.5f, 12.5f)
+                p.moveTo(5.5f, 19f); p.lineTo(12f, 12.5f); p.lineTo(18.5f, 19f)
+                c.drawPath(p, line)
+            }
+            "dice" -> {
+                c.drawRoundRect(android.graphics.RectF(3.5f, 3.5f, 20.5f, 20.5f), 4f, 4f, line)
+                for (pt in listOf(8.5f to 8.5f, 15.5f to 8.5f, 12f to 12f, 8.5f to 15.5f, 15.5f to 15.5f)) c.drawCircle(pt.first, pt.second, 1.3f, fill)
+            }
+            "star" -> {
+                for (i in 0 until 10) {
+                    val r = if (i % 2 == 0) 9.5f else 4.2f
+                    val a = Math.toRadians((-90 + i * 36).toDouble())
+                    val x = (12 + r * Math.cos(a)).toFloat()
+                    val y = (12.8 + r * Math.sin(a)).toFloat()
+                    if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+                }
+                p.close()
+                c.drawPath(p, line)
+            }
+            "gem" -> {
+                p.moveTo(7f, 4f); p.lineTo(17f, 4f); p.lineTo(21f, 10f); p.lineTo(12f, 21f); p.lineTo(3f, 10f); p.close()
+                p.moveTo(3f, 10f); p.lineTo(21f, 10f)
+                p.moveTo(9.5f, 4f); p.lineTo(8f, 10f); p.lineTo(12f, 21f)
+                p.moveTo(14.5f, 4f); p.lineTo(16f, 10f); p.lineTo(12f, 21f)
+                c.drawPath(p, line)
+            }
+            "route" -> {
+                p.moveTo(12f, 2.5f); p.lineTo(19.5f, 20.5f); p.lineTo(12f, 16.5f); p.lineTo(4.5f, 20.5f); p.close()
+                c.drawPath(p, line)
+            }
+            "moon" -> {
+                val a = Path(); a.addCircle(12f, 12f, 8.5f, Path.Direction.CW)
+                val b = Path(); b.addCircle(16.5f, 8.5f, 7.2f, Path.Direction.CW)
+                a.op(b, Path.Op.DIFFERENCE)
+                c.drawPath(a, line)
+            }
+            "pause" -> {
+                c.drawRoundRect(android.graphics.RectF(6.5f, 4.5f, 10.5f, 19.5f), 1.4f, 1.4f, fill)
+                c.drawRoundRect(android.graphics.RectF(13.5f, 4.5f, 17.5f, 19.5f), 1.4f, 1.4f, fill)
+            }
+            "sword" -> {
+                p.moveTo(4f, 20f); p.lineTo(18.5f, 5.5f); p.lineTo(20.5f, 3.5f); p.lineTo(20.5f, 7.5f); p.lineTo(6.5f, 21.5f)
+                p.moveTo(7f, 13f); p.lineTo(11f, 17f)
+                p.moveTo(3f, 21f); p.lineTo(6.5f, 17.5f)
+                c.drawPath(p, line)
+            }
+            "shield" -> {
+                p.moveTo(12f, 2.8f); p.lineTo(19.5f, 5.8f); p.lineTo(19.5f, 12f)
+                p.quadTo(19.5f, 18.5f, 12f, 21.5f); p.quadTo(4.5f, 18.5f, 4.5f, 12f); p.lineTo(4.5f, 5.8f); p.close()
+                c.drawPath(p, line)
+            }
+            "target" -> {
+                c.drawCircle(12f, 12f, 7.5f, line)
+                c.drawCircle(12f, 12f, 1.6f, fill)
+                p.moveTo(12f, 1.5f); p.lineTo(12f, 6f); p.moveTo(12f, 18f); p.lineTo(12f, 22.5f)
+                p.moveTo(1.5f, 12f); p.lineTo(6f, 12f); p.moveTo(18f, 12f); p.lineTo(22.5f, 12f)
+                c.drawPath(p, line)
+            }
+            "gear" -> {
+                c.drawCircle(12f, 12f, 3.2f, line)
+                c.drawCircle(12f, 12f, 6.6f, line)
+                for (i in 0 until 8) {
+                    val a = Math.toRadians((i * 45).toDouble())
+                    p.moveTo((12 + 6.6 * Math.cos(a)).toFloat(), (12 + 6.6 * Math.sin(a)).toFloat())
+                    p.lineTo((12 + 9.6 * Math.cos(a)).toFloat(), (12 + 9.6 * Math.sin(a)).toFloat())
+                }
+                c.drawPath(p, line)
+            }
+            "list" -> {
+                p.moveTo(9.5f, 6.5f); p.lineTo(20.5f, 6.5f)
+                p.moveTo(9.5f, 12f); p.lineTo(20.5f, 12f)
+                p.moveTo(9.5f, 17.5f); p.lineTo(20.5f, 17.5f)
+                c.drawPath(p, line)
+                for (y in listOf(6.5f, 12f, 17.5f)) c.drawCircle(4.8f, y, 1.3f, fill)
+            }
+            "stopwatch" -> {
+                c.drawCircle(12f, 13.5f, 8f, line)
+                p.moveTo(9.5f, 2.5f); p.lineTo(14.5f, 2.5f)
+                p.moveTo(12f, 13.5f); p.lineTo(12f, 8.5f)
+                p.moveTo(12f, 13.5f); p.lineTo(15.2f, 15.5f)
+                p.moveTo(18.5f, 7f); p.lineTo(20f, 5.5f)
+                c.drawPath(p, line)
+            }
+            "pen" -> {
+                p.moveTo(4f, 20.5f); p.lineTo(5f, 15.5f); p.lineTo(16.5f, 4f); p.lineTo(20.5f, 8f); p.lineTo(9f, 19.5f); p.close()
+                p.moveTo(14f, 6.5f); p.lineTo(18f, 10.5f)
+                c.drawPath(p, line)
+            }
+            else -> c.drawCircle(12f, 12f, 6f, line)
+        }
+        c.restore()
     }
 }

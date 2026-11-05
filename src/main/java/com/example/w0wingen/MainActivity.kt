@@ -68,17 +68,13 @@ class MainActivity : Activity() {
     )
 
     private val redFields = listOf(
-        Field("redRadius", "Red boss Random yarıçapı", "Red boss noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
         Field("redRetry", "Red boss yeniden bakma", "Haritada hiç canlı red boss görünmezse bu kadar saniye sonra tekrar bakılır (sn)", "15")
     )
 
-    private val routeFields = listOf(
-        Field("routeRadius", "Rota Random yarıçapı", "En yakın canlı boss bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150")
-    )
+    private val routeFields = listOf<Field>()
 
     private val goldFields = listOf(
         Field("goldWire", "Golden wire", "Golden kesilecek wire (farm ve buff gibi önce bu wire'a geçilir)", "3"),
-        Field("goldRadius", "Golden Random yarıçapı", "Golden noktasına bu kadar yaklaşınca Random bırakılıp yürünür (piksel)", "150"),
         Field("goldRetry", "Golden yeniden bakma", "Haritada hiç canlı golden görünmezse bu kadar saniye sonra tekrar bakılır; bu arada farm/bekleme (sn)", "15")
     )
 
@@ -94,12 +90,9 @@ class MainActivity : Activity() {
     private lateinit var randomOn: Switch
     private lateinit var farmOn: Switch
     private lateinit var goldOn: Switch
-    private lateinit var goldRandomOn: Switch
     private lateinit var redOn: Switch
     private lateinit var routeOn: Switch
-    private lateinit var routeRandomOn: Switch
     private lateinit var idleFarmOn: Switch
-    private lateinit var redRandomOn: Switch
     private lateinit var impOn: Switch
     private lateinit var angelOn: Switch
     private lateinit var reviveOn: Switch
@@ -266,22 +259,19 @@ class MainActivity : Activity() {
         reviveOn = sw(farm, "Ölünce Free Revival'a bas ve kaldığı işe dön", "cfg_reviveOn", true)
 
         val move = card(col, "Işınlanma ve yürüme")
-        randomOn = sw(move, "Bossa giderken Random ışınlanma açık", "cfg_randomOn", true)
+        randomOn = sw(move, "Random ışınlanma açık (boss, golden, red ve rota için tek ayar)", "cfg_randomOn", true)
         for (f in moveFields) addField(move, f)
 
         val rt = card(col, "Rota")
         routeOn = sw(rt, "Rota açık: rotadaki haritaları sırayla gez, her haritanın tüm wire'larında canlı bossları kes (açıkken golden/red/farm çalışmaz; rotayı oyunda İşaret sekmesi > Rota listesi'nden kur)", "cfg_routeOn", false)
-        routeRandomOn = sw(rt, "Rota: canlı boss uzaksa Random ışınlanma kullan", "cfg_routeRandomOn", false)
         for (f in routeFields) addField(rt, f)
 
         val gold = card(col, "Golden canavarlar")
         goldOn = sw(gold, "Boss yokken işaretli golden'ları kes (farm yerine; ikisini birlikte açma)", "cfg_goldOn", false)
-        goldRandomOn = sw(gold, "Golden'a giderken Random kullan", "cfg_goldRandomOn", false)
         for (f in goldFields) addField(gold, f)
 
         val red = card(col, "Red bosslar (VIP Domain; süre kaydedilmez)")
         redOn = sw(red, "Boss yokken işaretli red bossları kes (Oto sekmesindeki düğmeyle de açılır)", "cfg_redOn", false)
-        redRandomOn = sw(red, "Red boss'a giderken Random kullan", "cfg_redRandomOn", false)
         for (f in redFields) addField(red, f)
 
         val buff = card(col, "Buff")
@@ -327,12 +317,9 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_randomOn", randomOn.isChecked)
             e.putBoolean("cfg_farmOn", farmOn.isChecked)
             e.putBoolean("cfg_goldOn", goldOn.isChecked)
-            e.putBoolean("cfg_goldRandomOn", goldRandomOn.isChecked)
             e.putBoolean("cfg_redOn", redOn.isChecked)
             e.putBoolean("cfg_routeOn", routeOn.isChecked)
-            e.putBoolean("cfg_routeRandomOn", routeRandomOn.isChecked)
             e.putBoolean("cfg_idleFarmOn", idleFarmOn.isChecked)
-            e.putBoolean("cfg_redRandomOn", redRandomOn.isChecked)
             e.putBoolean("cfg_impOn", impOn.isChecked)
             e.putBoolean("cfg_angelOn", angelOn.isChecked)
             e.putBoolean("cfg_reviveOn", reviveOn.isChecked)
