@@ -280,6 +280,8 @@ class TimerService : AccessibilityService() {
     private var gapView: TextView? = null
     private var stopWin: TextView? = null
     private var stopLp: WindowManager.LayoutParams? = null
+    private var dockSc: TextView? = null
+    private var dockScLp: WindowManager.LayoutParams? = null
     private var toolsBox: LinearLayout? = null
     private var panelLp: WindowManager.LayoutParams? = null
     private var handleLp: WindowManager.LayoutParams? = null
@@ -372,11 +374,13 @@ class TimerService : AccessibilityService() {
                 panel?.let { wm.removeView(it) }
                 handle?.let { wm.removeView(it) }
                 stopWin?.let { wm.removeView(it) }
+                dockSc?.let { wm.removeView(it) }
             } catch (e: Exception) {
             }
             panel = null
             handle = null
             stopWin = null
+            dockSc = null
             sizeBtns.clear()
             applyTheme()
             buildUi()
@@ -470,6 +474,7 @@ class TimerService : AccessibilityService() {
             panel?.let { wm.removeView(it) }
             handle?.let { wm.removeView(it) }
             stopWin?.let { wm.removeView(it) }
+            dockSc?.let { wm.removeView(it) }
             menu?.let { wm.removeView(it) }
         } catch (e: Exception) {
         }
@@ -1275,7 +1280,7 @@ class TimerService : AccessibilityService() {
             try {
                 if (through) {
                     val m = dp(24)
-                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp))
+                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp), Pair(dockSc, dockScLp))
                     for ((v, lp) in cands) {
                         if (v == null || lp == null || v.visibility != View.VISIBLE) continue
                         val w = if (v.width > 0) v.width else lp.width
@@ -2581,6 +2586,51 @@ class TimerService : AccessibilityService() {
 
         val names = profileNames(prefs())
         val active = prefs().getString("profile_active", "") ?: ""
+        // KONTROL MERKEZİ: her şeyi tek ekrandan aç/kapat
+        val icons = mapOf(
+            "potOn" to "🧪", "recycleOn" to "♻", "farmOn" to "🌾", "impOn" to "👹", "angelOn" to "😇", "reviveOn" to "❤",
+            "buffOn" to "💪", "randomOn" to "🎲", "goldOn" to "🥇", "goldRandomOn" to "🎯", "redOn" to "🔴", "redRandomOn" to "🎯",
+            "routeOn" to "🧭", "routeRandomOn" to "🎯", "idleFarmOn" to "💤"
+        )
+        val cc = TextView(this)
+        cc.text = "KONTROL MERKEZİ"
+        cc.textSize = 11f
+        cc.setTextColor(ACCENT)
+        cc.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        box.addView(cc)
+        for (chunk in TOGGLES.chunked(3)) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            for ((j, t) in chunk.withIndex()) {
+                val isOn = on(t.first)
+                val tile = TextView(this)
+                tile.text = (icons[t.first] ?: "•") + "\n" + t.second
+                tile.textSize = 12f
+                tile.gravity = Gravity.CENTER
+                tile.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                tile.setTextColor(if (isOn) 0xFF0B1220.toInt() else TEXT_DIM)
+                tile.background = rounded(if (isOn) ACCENT else CARD_BG, 14)
+                tile.setOnClickListener {
+                    prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
+                    updateToggles()
+                }
+                val tl = LinearLayout.LayoutParams(0, dp(52), 1f)
+                if (j > 0) tl.leftMargin = dp(5)
+                row.addView(tile, tl)
+            }
+            for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(52), 1f).also { it.leftMargin = dp(5) })
+            box.addView(row, lpTop())
+        }
+        val actHead = TextView(this)
+        actHead.text = "HIZLI EYLEM"
+        actHead.textSize = 11f
+        actHead.setTextColor(ACCENT)
+        actHead.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        actHead.setPadding(0, dp(10), 0, 0)
+        box.addView(actHead)
+        buttons(listOf<Pair<String, () -> Unit>>("Pot" to { runManual { doPots() } }, "Recycle" to { runManual { doRecycle() } }, "Buff" to { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } }, "Angel" to { quickTap("angel") }))
+        buttons(listOf<Pair<String, () -> Unit>>("Kısayollar" to { toggleShortcuts() }, "Kronometre" to { toggleStopwatch() }, "Zaman kaydet" to { addStamp() }))
+
         val chipHead = TextView(this)
         chipHead.text = "PROFİL"
         chipHead.textSize = 11f
@@ -2609,7 +2659,6 @@ class TimerService : AccessibilityService() {
             hs.addView(row)
             box.addView(hs, lpTop(dp(38)))
         }
-        buttons(listOf<Pair<String, () -> Unit>>("Kısayollar" to { toggleShortcuts() }, "Kronometre" to { toggleStopwatch() }))
         val onList = TOGGLES.filter { on(it.first) }.map { it.second }
         val info = TextView(this)
         info.textSize = 11f
@@ -2684,6 +2733,7 @@ class TimerService : AccessibilityService() {
             t.text = l.joinToString(" · ") + " açık"
             cur.addView(t)
         }
+        applyFont(box)
     }
 
     private fun updateToggles() {
@@ -2699,7 +2749,13 @@ class TimerService : AccessibilityService() {
 
     private fun applyPanel() {
         panel?.visibility = if (panelOpen) View.VISIBLE else View.GONE
-        stopWin?.visibility = if (autoRunning) View.VISIBLE else View.GONE
+        stopWin?.let {
+            it.visibility = View.VISIBLE
+            val act = autoRunning || busy
+            it.background = rounded(if (act) BAD else CARD_BG, 12)
+            it.alpha = if (act) 1f else 0.55f
+        }
+        dockSc?.visibility = View.VISIBLE
         val mode = if (autoRunning) "▶" else if (busy) "⚙" else "⏱"
         handle?.text = (if (panelOpen) "▸" else "◂") + "\n" + mode
         placeBar()
@@ -2707,6 +2763,15 @@ class TimerService : AccessibilityService() {
     }
 
     /** Tutamacı ve paneli konumlar: panel tutamacın bulunduğu tarafa göre soluna ya da sağına açılır. */
+    /** Tüm panelde tek yazı tipi: kısık, ince çizgili sans. */
+    private fun applyFont(v: View) {
+        if (v is TextView) {
+            val bold = v.typeface?.isBold == true
+            v.typeface = android.graphics.Typeface.create("sans-serif-condensed", if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        }
+        if (v is ViewGroup) for (i in 0 until v.childCount) applyFont(v.getChildAt(i))
+    }
+
     private fun placeBar() {
         refreshScreen()
         val h = handle ?: return
@@ -2735,6 +2800,17 @@ class TimerService : AccessibilityService() {
             try {
                 wm.updateViewLayout(sv2, sl)
             } catch (e: Exception) {
+            }
+            val dl = dockScLp
+            val dv = dockSc
+            if (dl != null && dv != null) {
+                val below = sl.y > hy
+                dl.x = sl.x
+                dl.y = if (below) (if (sl.y + sh2 + dp(4) + sh2 <= screenH) sl.y + sh2 + dp(4) else maxOf(0, hy - sh2 - dp(4))) else maxOf(0, sl.y - sh2 - dp(4))
+                try {
+                    wm.updateViewLayout(dv, dl)
+                } catch (e: Exception) {
+                }
             }
         }
         val pl = panelLp
@@ -3203,7 +3279,7 @@ class TimerService : AccessibilityService() {
         homeBox = tabHome
         val homeScroll = ScrollView(this)
         homeScroll.addView(tabHome)
-        val tabNames = listOf("Ana", "Boss", "Oto", "İşaret", "Bakım", "Araç")
+        val tabNames = listOf("Merkez", "Boss", "Oto", "İşaret", "Bakım", "Araç")
         val tabViews = listOf<View>(homeScroll, tabBoss, tabAuto, tabMark, tabMaint, tabTools)
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
@@ -3242,6 +3318,7 @@ class TimerService : AccessibilityService() {
         outer.alpha = uiAlpha() / 100f
         updateSizeBtns()
 
+        applyFont(outer)
         outer.visibility = View.GONE
         val pl = overlayParams(panelW())
         wm.addView(outer, pl)
@@ -3305,11 +3382,27 @@ class TimerService : AccessibilityService() {
         sw.background = rounded(BAD, 12)
         sw.setPadding(dp(8), dp(6), dp(8), dp(6))
         sw.setOnClickListener { stopJob() }
-        sw.visibility = View.GONE
         val slp2 = overlayParams(dp(82))
         wm.addView(sw, slp2)
         stopWin = sw
         stopLp = slp2
+        applyFont(sw)
+
+        // Kısayollar için tutamacın dışında duran düğme (Durdur gibi)
+        val kb = TextView(this)
+        kb.text = "⚡ Kısayol"
+        kb.textSize = 12f
+        kb.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        kb.gravity = Gravity.CENTER
+        kb.setTextColor(0xFF0B1220.toInt())
+        kb.background = rounded(ACCENT, 12)
+        kb.setPadding(dp(8), dp(6), dp(8), dp(6))
+        kb.setOnClickListener { toggleShortcuts() }
+        val klp = overlayParams(dp(82))
+        wm.addView(kb, klp)
+        dockSc = kb
+        dockScLp = klp
+        applyFont(kb)
         updateUi()
     }
 
@@ -5902,6 +5995,7 @@ class TimerService : AccessibilityService() {
             body.addView(h)
             grid(cat.map { it.first }.filter { !chosen.contains(it) }, true)
         }
+        applyFont(body)
     }
 
     private fun closeShortcuts() {
@@ -5949,6 +6043,7 @@ class TimerService : AccessibilityService() {
         body.orientation = LinearLayout.VERTICAL
         box.addView(body)
         scBody = body
+        applyFont(head)
 
         val lp = overlayParams(width)
         lp.x = prefs().getInt("scx", (screenW * 0.05f).toInt()).coerceIn(0, maxOf(0, screenW - width))
