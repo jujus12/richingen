@@ -2688,29 +2688,6 @@ class TimerService : AccessibilityService() {
                 updateToggles()
             })
         })
-        val ac = TextView(this)
-        ac.text = "EYLEMLER"
-        ac.textSize = 11f
-        ac.setTextColor(ACCENT)
-        ac.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        ac.setPadding(0, dp(10), 0, 0)
-        box.addView(ac)
-        fun act(icon: String, label: String, f: () -> Unit) = Triple(icon, label, Pair<Boolean?, () -> Unit>(null, f))
-        tileRow(listOf(
-            act("pause", "Durdur") { stopJob() },
-            act("sword", "Oto atak") { quickTap("autoAtk") },
-            act("shield", "Kalkan") { quickTap("shield") },
-            act("pot", "Pot kontrol") { runManual { doPots() } },
-            act("recycle", "Recycle") { runManual { doRecycle() } },
-            act("buff", "Buff") { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } },
-            act("angel", "Angel") { quickTap("angel") },
-            act("skull", "Farma git") { runManual { doFarm() } },
-            act("target", "Canlı kaydet") { runManual { doSaveAlive() } },
-            act("list", "Kısayollar") { toggleShortcuts() },
-            act("stopwatch", "Kronometre") { toggleStopwatch() },
-            act("pen", "Zaman kaydet") { addStamp() },
-            act("gear", "Ayar") { toggleMenu() }
-        ))
 
         if (on("farmOn")) {
             head("FARM")
