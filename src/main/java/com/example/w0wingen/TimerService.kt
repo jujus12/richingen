@@ -210,9 +210,16 @@ class TimerService : AccessibilityService() {
             Triple("idleFarmOn", "Boşta farm", false)
         )
 
+        /** Kayıtlı tema numarası; Gotik temaya bir kez otomatik geçilir. */
+        fun themeIdx(p: android.content.SharedPreferences): Int {
+            if (!p.getBoolean("themeGothic", false)) p.edit().putInt("theme", 0).putBoolean("themeGothic", true).apply()
+            return p.getInt("theme", 0).coerceIn(0, THEMES.size - 1)
+        }
+
         /** Temalar: vurgu, panel, kart, eksik, ayar ekranı zemini, ayar ekranı girişi. */
-        val THEME_NAMES = listOf("Mavi", "Zümrüt", "Mor", "Turuncu", "Gül")
+        val THEME_NAMES = listOf("Gotik", "Mavi", "Zümrüt", "Mor", "Turuncu", "Gül")
         val THEMES = listOf(
+            intArrayOf(0xFFB48AE0.toInt(), 0xF2100D14.toInt(), 0xFF1B1721.toInt(), 0xFF3A1824.toInt(), 0xFF0B090E.toInt(), 0xFF1B1721.toInt()),
             intArrayOf(0xFF4FC3F7.toInt(), 0xF2161920.toInt(), 0xFF272C3A.toInt(), 0xFF4A2429.toInt(), 0xFF0F1115.toInt(), 0xFF262B3A.toInt()),
             intArrayOf(0xFF2DD4BF.toInt(), 0xF2101A18.toInt(), 0xFF1F302C.toInt(), 0xFF4A2429.toInt(), 0xFF0B1412.toInt(), 0xFF1F2E2B.toInt()),
             intArrayOf(0xFFB388FF.toInt(), 0xF2181426.toInt(), 0xFF2B2540.toInt(), 0xFF4A2429.toInt(), 0xFF100C1A.toInt(), 0xFF2A2440.toInt()),
@@ -361,7 +368,7 @@ class TimerService : AccessibilityService() {
     private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     private fun applyTheme() {
-        val t = THEMES[prefs().getInt("theme", 0).coerceIn(0, THEMES.size - 1)]
+        val t = THEMES[themeIdx(prefs())]
         ACCENT = t[0]
         PANEL_BG = t[1]
         CARD_BG = t[2]
@@ -2340,6 +2347,39 @@ class TimerService : AccessibilityService() {
         return g
     }
 
+    /** İnce çerçeveli kart. */
+    private fun card(color: Int, r: Int, stroke: Int = 0xFF332D40.toInt()): GradientDrawable {
+        val g = GradientDrawable()
+        g.setColor(color)
+        g.cornerRadius = dp(r).toFloat()
+        g.setStroke(dp(1), stroke)
+        return g
+    }
+
+    /** Gotik çift çerçeve: dışta gri-gümüş, içte mor ince hat. */
+    private fun framed(color: Int, r: Int): android.graphics.drawable.Drawable {
+        val outer = GradientDrawable()
+        outer.setColor(color)
+        outer.cornerRadius = dp(r).toFloat()
+        outer.setStroke(dp(2), 0xFF5A5468.toInt())
+        val inner = GradientDrawable()
+        inner.setColor(Color.TRANSPARENT)
+        inner.cornerRadius = dp(r - 4).toFloat()
+        inner.setStroke(dp(1), 0xFF6A3FA8.toInt())
+        val ld = android.graphics.drawable.LayerDrawable(arrayOf(outer, inner))
+        ld.setLayerInset(1, dp(5), dp(5), dp(5), dp(5))
+        return ld
+    }
+
+    /** Açık düğme dolgusu: vurgu renginin canlı koyu tonu. */
+    private fun onFill(): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(ACCENT, hsv)
+        hsv[1] = minOf(0.78f, maxOf(hsv[1], 0.5f))
+        hsv[2] = 0.62f
+        return Color.HSVToColor(hsv)
+    }
+
     private fun mkBtn(text: String, bg: Int = CARD_BG, fg: Int = Color.WHITE, onClick: () -> Unit): Button {
         val b = Button(this)
         b.text = text
@@ -2351,7 +2391,7 @@ class TimerService : AccessibilityService() {
         b.minimumHeight = 0
         b.minWidth = 0
         b.minimumWidth = 0
-        b.background = rounded(bg, 10)
+        b.background = card(bg, 10)
         b.setOnClickListener { onClick() }
         return b
     }
@@ -2586,51 +2626,7 @@ class TimerService : AccessibilityService() {
 
         val names = profileNames(prefs())
         val active = prefs().getString("profile_active", "") ?: ""
-        // KONTROL MERKEZİ: her şeyi tek ekrandan aç/kapat
-        val icons = mapOf(
-            "potOn" to "🧪", "recycleOn" to "♻", "farmOn" to "🌾", "impOn" to "👹", "angelOn" to "😇", "reviveOn" to "❤",
-            "buffOn" to "💪", "randomOn" to "🎲", "goldOn" to "🥇", "goldRandomOn" to "🎯", "redOn" to "🔴", "redRandomOn" to "🎯",
-            "routeOn" to "🧭", "routeRandomOn" to "🎯", "idleFarmOn" to "💤"
-        )
-        val cc = TextView(this)
-        cc.text = "KONTROL MERKEZİ"
-        cc.textSize = 11f
-        cc.setTextColor(ACCENT)
-        cc.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        box.addView(cc)
-        for (chunk in TOGGLES.chunked(3)) {
-            val row = LinearLayout(this)
-            row.orientation = LinearLayout.HORIZONTAL
-            for ((j, t) in chunk.withIndex()) {
-                val isOn = on(t.first)
-                val tile = TextView(this)
-                tile.text = (icons[t.first] ?: "•") + "\n" + t.second
-                tile.textSize = 12f
-                tile.gravity = Gravity.CENTER
-                tile.typeface = android.graphics.Typeface.DEFAULT_BOLD
-                tile.setTextColor(if (isOn) 0xFF0B1220.toInt() else TEXT_DIM)
-                tile.background = rounded(if (isOn) ACCENT else CARD_BG, 14)
-                tile.setOnClickListener {
-                    prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
-                    updateToggles()
-                }
-                val tl = LinearLayout.LayoutParams(0, dp(52), 1f)
-                if (j > 0) tl.leftMargin = dp(5)
-                row.addView(tile, tl)
-            }
-            for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(52), 1f).also { it.leftMargin = dp(5) })
-            box.addView(row, lpTop())
-        }
-        val actHead = TextView(this)
-        actHead.text = "HIZLI EYLEM"
-        actHead.textSize = 11f
-        actHead.setTextColor(ACCENT)
-        actHead.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        actHead.setPadding(0, dp(10), 0, 0)
-        box.addView(actHead)
-        buttons(listOf<Pair<String, () -> Unit>>("Pot" to { runManual { doPots() } }, "Recycle" to { runManual { doRecycle() } }, "Buff" to { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } }, "Angel" to { quickTap("angel") }))
-        buttons(listOf<Pair<String, () -> Unit>>("Kısayollar" to { toggleShortcuts() }, "Kronometre" to { toggleStopwatch() }, "Zaman kaydet" to { addStamp() }))
-
+        // PROFİLLER (en üstte)
         val chipHead = TextView(this)
         chipHead.text = "PROFİL"
         chipHead.textSize = 11f
@@ -2650,7 +2646,8 @@ class TimerService : AccessibilityService() {
             row.orientation = LinearLayout.HORIZONTAL
             for (n in names) {
                 val sel = n == active
-                val c = mkBtn(n, if (sel) ACCENT else CARD_BG, if (sel) 0xFF0B1220.toInt() else Color.WHITE) { loadProfile(n) }
+                val c = mkBtn(n, if (sel) onFill() else CARD_BG, Color.WHITE) { loadProfile(n) }
+                if (sel) c.background = card(onFill(), 10, ACCENT)
                 c.textSize = 12f
                 val cl = LinearLayout.LayoutParams(wrap, dp(34))
                 cl.rightMargin = dp(6)
@@ -2659,23 +2656,73 @@ class TimerService : AccessibilityService() {
             hs.addView(row)
             box.addView(hs, lpTop(dp(38)))
         }
-        val onList = TOGGLES.filter { on(it.first) }.map { it.second }
-        val info = TextView(this)
-        info.textSize = 11f
-        info.setTextColor(TEXT_DIM)
-        info.setPadding(0, dp(6), 0, 0)
-        info.text = if (onList.isEmpty()) "Açık seçenek yok. Oto sekmesinden aç." else "Açık: " + onList.joinToString(" · ")
-        cur.addView(info)
+
+        // KONTROL MERKEZİ: açık/kapalı kutuları ve eylemler
+        val icons = mapOf(
+            "potOn" to "⚗", "recycleOn" to "↻", "farmOn" to "☠", "impOn" to "Ψ", "angelOn" to "✦", "reviveOn" to "♥",
+            "buffOn" to "▲", "randomOn" to "⚄", "goldOn" to "★", "goldRandomOn" to "◎", "redOn" to "◆", "redRandomOn" to "◎",
+            "routeOn" to "➤", "routeRandomOn" to "◎", "idleFarmOn" to "☾"
+        )
+        fun tileRow(items: List<Triple<String, String, Pair<Boolean?, () -> Unit>>>) {
+            for (chunk in items.chunked(3)) {
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                for ((j, it) in chunk.withIndex()) {
+                    val state = it.third.first
+                    val tile = TextView(this)
+                    tile.text = it.first + "\uFE0E\n" + it.second
+                    tile.textSize = 11f
+                    tile.gravity = Gravity.CENTER
+                    tile.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    tile.setTextColor(if (state == false) TEXT_DIM else Color.WHITE)
+                    tile.background = if (state == true) card(onFill(), 14, ACCENT) else card(CARD_BG, 14, 0xFF332D40.toInt())
+                    val act = it.third.second
+                    tile.setOnClickListener { act() }
+                    val tl = LinearLayout.LayoutParams(0, dp(56), 1f)
+                    if (j > 0) tl.leftMargin = dp(5)
+                    row.addView(tile, tl)
+                }
+                for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(56), 1f).also { it.leftMargin = dp(5) })
+                box.addView(row, lpTop())
+            }
+        }
+        val cc = TextView(this)
+        cc.text = "KONTROL MERKEZİ"
+        cc.textSize = 11f
+        cc.setTextColor(ACCENT)
+        cc.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        cc.setPadding(0, dp(10), 0, 0)
+        box.addView(cc)
+        tileRow(TOGGLES.map { t ->
+            Triple(icons[t.first] ?: "•", t.second, Pair<Boolean?, () -> Unit>(on(t.first)) {
+                prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
+                updateToggles()
+            })
+        })
+        val ac = TextView(this)
+        ac.text = "EYLEMLER"
+        ac.textSize = 11f
+        ac.setTextColor(ACCENT)
+        ac.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        ac.setPadding(0, dp(10), 0, 0)
+        box.addView(ac)
+        fun act(icon: String, label: String, f: () -> Unit) = Triple(icon, label, Pair<Boolean?, () -> Unit>(null, f))
+        tileRow(listOf(
+            act("❚❚", "Durdur") { stopJob() },
+            act("⚗", "Pot kontrol") { runManual { doPots() } },
+            act("↻", "Recycle") { runManual { doRecycle() } },
+            act("▲", "Buff") { runManual { doBuff(cfgI("minAtk", 0), cfgI("minDef", 0)) } },
+            act("✦", "Angel") { quickTap("angel") },
+            act("☠", "Farma git") { runManual { doFarm() } },
+            act("☰", "Kısayollar") { toggleShortcuts() },
+            act("◔", "Kronometre") { toggleStopwatch() },
+            act("✎", "Zaman kaydet") { addStamp() }
+        ))
 
         if (on("farmOn")) {
             head("FARM")
             step("Farm wire'ı", "farmWire", 3, 1, 3) { 1 }
             step("Varış bekleme (sn)", "farmWait", 10, 0, 60) { 5 }
-        }
-        if (on("idleFarmOn")) {
-            head("BOŞTA FARM")
-            step("Kesim yoksa (dk)", "idleFarmMin", 10, 0, 120) { 1 }
-            step("Farmda kal (dk)", "idleFarmStay", 10, 1, 120) { 1 }
         }
         if (on("routeOn")) {
             head("ROTA")
@@ -2697,42 +2744,6 @@ class TimerService : AccessibilityService() {
             head("BOSSA GİDİŞ")
             step("Random yarıçap (px)", "radius", 200, 0, 1000) { 25 }
         }
-        if (on("potOn") || on("recycleOn")) {
-            head("POT VE RECYCLE")
-            if (on("potOn")) {
-                step("Pot eşiği", "potMin", 20, 0, 999) { 5 }
-                step("Pot okuma (sn)", "potWatchSec", 60, 10, 600) { 10 }
-            }
-            if (on("recycleOn")) {
-                step("Her kaç kesimde Recycle (0=kapalı)", "recycleKillEvery", 0, 0, 50) { 1 }
-                step("Recycle aralığı (dk)", "recycleEvery", 20, 1, 240) { 5 }
-            }
-        }
-        if (on("buffOn")) {
-            head("BUFF")
-            val bs = mkBtn("Adım: " + prefs().getInt("buffStep", 1000) + "  ▸") { }
-            bs.setOnClickListener {
-                val cur = prefs().getInt("buffStep", 1000)
-                prefs().edit().putInt("buffStep", when (cur) { 100 -> 1000; 1000 -> 10000; else -> 100 }).apply()
-                refreshHome()
-            }
-            cur.addView(bs, lpTop(dp(34)))
-            step("Minimum ATK", "minAtk", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
-            step("Minimum DEF", "minDef", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
-            step("Buff wire'ı", "buffWire", 3, 1, 3) { 1 }
-        }
-        if (on("impOn") || on("angelOn") || on("reviveOn")) {
-            head("SAVAŞ")
-            val l = ArrayList<String>()
-            if (on("impOn")) l.add("Imp")
-            if (on("angelOn")) l.add("Angel")
-            if (on("reviveOn")) l.add("Free Revival")
-            val t = TextView(this)
-            t.textSize = 11f
-            t.setTextColor(Color.WHITE)
-            t.text = l.joinToString(" · ") + " açık"
-            cur.addView(t)
-        }
         applyFont(box)
     }
 
@@ -2752,7 +2763,7 @@ class TimerService : AccessibilityService() {
         stopWin?.let {
             it.visibility = View.VISIBLE
             val act = autoRunning || busy
-            it.background = rounded(if (act) BAD else CARD_BG, 12)
+            it.background = card(if (act) BAD else CARD_BG, 12, if (act) 0xFFFF8A80.toInt() else 0xFF332D40.toInt())
             it.alpha = if (act) 1f else 0.55f
         }
         dockSc?.visibility = View.VISIBLE
@@ -2765,7 +2776,7 @@ class TimerService : AccessibilityService() {
     /** Tutamacı ve paneli konumlar: panel tutamacın bulunduğu tarafa göre soluna ya da sağına açılır. */
     /** Tüm panelde tek yazı tipi: kısık, ince çizgili sans. */
     private fun applyFont(v: View) {
-        if (v is TextView) {
+        if (v is TextView && v.tag != "serif") {
             val bold = v.typeface?.isBold == true
             v.typeface = android.graphics.Typeface.create("sans-serif-condensed", if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
         }
@@ -2836,18 +2847,27 @@ class TimerService : AccessibilityService() {
 
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
-        outer.background = rounded(PANEL_BG, 16)
-        outer.setPadding(dp(12), dp(10), dp(12), dp(12))
+        outer.background = framed(PANEL_BG, 18)
+        outer.setPadding(dp(16), dp(12), dp(16), dp(16))
 
         // başlık
         val head = LinearLayout(this)
         head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
+        val gem = TextView(this)
+        gem.text = "◆"
+        gem.textSize = 14f
+        gem.gravity = Gravity.CENTER
+        gem.setTextColor(0xFFA03CF0.toInt())
+        outer.addView(gem, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         val title = TextView(this)
-        title.text = "Richingen"
-        title.textSize = 15f
-        title.setTextColor(Color.WHITE)
-        title.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        title.text = "RICHINGEN"
+        title.textSize = 19f
+        title.letterSpacing = 0.12f
+        title.gravity = Gravity.CENTER
+        title.setTextColor(0xFFC9ADEB.toInt())
+        title.tag = "serif"
+        title.typeface = android.graphics.Typeface.SERIF
         head.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         outer.addView(head)
 
@@ -3009,7 +3029,7 @@ class TimerService : AccessibilityService() {
         tb.addView(r1, rlp)
         val themeBtn = mkBtn("") { }
         fun themeLabel() {
-            themeBtn.text = "Tema: " + THEME_NAMES[prefs().getInt("theme", 0).coerceIn(0, THEMES.size - 1)] + "  ▸"
+            themeBtn.text = "Tema: " + THEME_NAMES[themeIdx(prefs())] + "  ▸"
         }
         themeLabel()
         themeBtn.setOnClickListener {
@@ -3050,7 +3070,7 @@ class TimerService : AccessibilityService() {
 
         // buff eşikleri panelden ayarlanır
         val boxBuff = sect(tabMaint, "BUFF EŞİĞİ (ATK ve DEF ikisi de altındaysa buff'a gidilir)")
-        fun stepRow(label: String, key: String, def: Int, lo: Int, hi: Int, stepOf: () -> Int) {
+        fun stepRow(label: String, key: String, def: Int, lo: Int, hi: Int, into: LinearLayout = boxBuff, stepOf: () -> Int) {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
@@ -3073,7 +3093,7 @@ class TimerService : AccessibilityService() {
             row.addView(mkBtn("−") { bump(-1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
             row.addView(v, LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT))
             row.addView(mkBtn("+") { bump(1) }, LinearLayout.LayoutParams(dp(38), dp(34)))
-            boxBuff.addView(row, rlp)
+            into.addView(row, rlp)
         }
         val stepBtn = mkBtn("") { }
         fun stepLabel() {
@@ -3095,6 +3115,14 @@ class TimerService : AccessibilityService() {
         stepRow("Minimum DEF", "minDef", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
         stepRow("Buff wire'ı", "buffWire", 3, 1, 3) { 1 }
         stepRow("Buff bekleme sınırı (sn)", "buffWait", 90, 15, 600) { 15 }
+        val boxPot = sect(tabMaint, "POT VE RECYCLE")
+        stepRow("Pot eşiği", "potMin", 20, 0, 999, boxPot) { 5 }
+        stepRow("Pot okuma (sn)", "potWatchSec", 60, 10, 600, boxPot) { 10 }
+        stepRow("Her kaç kesimde Recycle (0=kapalı)", "recycleKillEvery", 0, 0, 50, boxPot) { 1 }
+        stepRow("Recycle aralığı (dk)", "recycleEvery", 20, 1, 240, boxPot) { 5 }
+        val boxIdle = sect(tabMaint, "BOŞTA FARM")
+        stepRow("Kesim yoksa (dk)", "idleFarmMin", 10, 0, 120, boxIdle) { 1 }
+        stepRow("Farmda kal (dk)", "idleFarmStay", 10, 1, 120, boxIdle) { 1 }
         boxAutoBtns.addView(
             btnRow(listOf<Pair<String, () -> Unit>>("Farma git" to { runManual { doFarm() } }), dp(36)),
             rlp
@@ -3279,8 +3307,8 @@ class TimerService : AccessibilityService() {
         homeBox = tabHome
         val homeScroll = ScrollView(this)
         homeScroll.addView(tabHome)
-        val tabNames = listOf("Merkez", "Boss", "Oto", "İşaret", "Bakım", "Araç")
-        val tabViews = listOf<View>(homeScroll, tabBoss, tabAuto, tabMark, tabMaint, tabTools)
+        val tabNames = listOf("Merkez", "Boss", "İşaret", "Bakım", "Araç")
+        val tabViews = listOf<View>(homeScroll, tabBoss, tabMark, tabMaint, tabTools)
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
         tabBar.orientation = LinearLayout.HORIZONTAL
@@ -3288,7 +3316,7 @@ class TimerService : AccessibilityService() {
             for (k in tabViews.indices) {
                 tabViews[k].visibility = if (k == i) View.VISIBLE else View.GONE
                 tabBtns[k].setTextColor(if (k == i) ACCENT else TEXT_DIM)
-                tabBtns[k].background = rounded(if (k == i) CARD_BG else 0x00000000, 8)
+                tabBtns[k].background = if (k == i) card(CARD_BG, 8, 0xFF6A3FA8.toInt()) else rounded(0x00000000, 8)
             }
             prefs().edit().putInt("tab", i).apply()
             outer.post { placeBar() }
@@ -3308,12 +3336,12 @@ class TimerService : AccessibilityService() {
         outer.addView(tabBar, tbl)
         outer.addView(homeScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
         outer.addView(tabBoss)
-        outer.addView(tabAuto)
         outer.addView(tabMark)
         outer.addView(tabMaint)
         outer.addView(tabTools)
         buildHome(tabHome)
-        showTab(prefs().getInt("tab", 0).coerceIn(0, 5))
+        if (!prefs().getBoolean("tabs5", false)) prefs().edit().putInt("tab", 0).putBoolean("tabs5", true).apply()
+        showTab(prefs().getInt("tab", 0).coerceIn(0, 4))
         outer.addView(mainRow, mainRowLp)
         outer.alpha = uiAlpha() / 100f
         updateSizeBtns()
@@ -3390,12 +3418,12 @@ class TimerService : AccessibilityService() {
 
         // Kısayollar için tutamacın dışında duran düğme (Durdur gibi)
         val kb = TextView(this)
-        kb.text = "⚡ Kısayol"
+        kb.text = "☰ Kısayol"
         kb.textSize = 12f
         kb.typeface = android.graphics.Typeface.DEFAULT_BOLD
         kb.gravity = Gravity.CENTER
-        kb.setTextColor(0xFF0B1220.toInt())
-        kb.background = rounded(ACCENT, 12)
+        kb.setTextColor(Color.WHITE)
+        kb.background = card(onFill(), 12, ACCENT)
         kb.setPadding(dp(8), dp(6), dp(8), dp(6))
         kb.setOnClickListener { toggleShortcuts() }
         val klp = overlayParams(dp(82))
@@ -3540,8 +3568,8 @@ class TimerService : AccessibilityService() {
         refreshScreen()
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
-        outer.background = rounded(PANEL_BG, 16)
-        outer.setPadding(dp(14), dp(12), dp(14), dp(14))
+        outer.background = framed(PANEL_BG, 18)
+        outer.setPadding(dp(18), dp(14), dp(18), dp(16))
         val head = LinearLayout(this)
         head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
@@ -3553,6 +3581,7 @@ class TimerService : AccessibilityService() {
         head.addView(t, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         head.addView(mkBtn("Kapat ✕") { closeBossWin() }, LinearLayout.LayoutParams(dp(90), dp(36)))
         outer.addView(head)
+        outer.addView(mkBtn("✎  Canlı boss kaydet") { runManual { doSaveAlive() } }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38)).also { it.topMargin = dp(6) })
         val hint = TextView(this)
         hint.text = "Satıra dokun: bossa git ve kes. Silmek için ✕'e uzun bas."
         hint.textSize = 11f
@@ -5950,7 +5979,7 @@ class TimerService : AccessibilityService() {
                     val isTog = k.startsWith("t:")
                     val isOn = isTog && on(k.substring(2))
                     val label = if (add) "＋ " + c.second else if (scEdit) "✕ " + c.second else if (isTog) c.second + (if (isOn) " ✓" else " ✗") else c.second
-                    val bg = if (add) CARD_BG else if (isTog) (if (isOn) 0xFF1F5A3A.toInt() else MISSING_BG) else CARD_BG
+                    val bg = if (add) CARD_BG else if (isTog) (if (isOn) onFill() else MISSING_BG) else CARD_BG
                     val bt = mkBtn(label, bg) {
                         if (add) {
                             val l = scList()
@@ -6016,19 +6045,21 @@ class TimerService : AccessibilityService() {
             return
         }
         refreshScreen()
-        val width = dp(200)
+        val width = dp(220)
         val box = LinearLayout(this)
         box.orientation = LinearLayout.VERTICAL
-        box.background = rounded(PANEL_BG, 14)
-        box.setPadding(dp(8), dp(4), dp(8), dp(8))
+        box.background = framed(PANEL_BG, 16)
+        box.setPadding(dp(12), dp(8), dp(12), dp(12))
         val head = LinearLayout(this)
         head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
         val title = TextView(this)
-        title.text = "⠿ Kısayollar"
+        title.text = "◆ KISAYOLLAR"
         title.textSize = 13f
-        title.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        title.setTextColor(ACCENT)
+        title.letterSpacing = 0.1f
+        title.tag = "serif"
+        title.typeface = android.graphics.Typeface.SERIF
+        title.setTextColor(0xFFC9ADEB.toInt())
         head.addView(title, LinearLayout.LayoutParams(0, dp(34), 1f).also { it.gravity = Gravity.CENTER_VERTICAL })
         title.gravity = Gravity.CENTER_VERTICAL
         val eb = mkBtn("✎") {

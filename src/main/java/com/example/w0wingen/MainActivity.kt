@@ -118,7 +118,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val th = TimerService.THEMES[prefs().getInt("theme", 0).coerceIn(0, TimerService.THEMES.size - 1)]
+        val th = TimerService.THEMES[TimerService.themeIdx(prefs())]
         ACCENT = th[0]
         BG = th[4]
         CARD = th[2]
