@@ -61,6 +61,9 @@ class TimerService : AccessibilityService() {
     /** Bir adım başarısız oldu (mesaj zaten gösterildi). */
     private class StepFail : RuntimeException()
 
+    /** Başka bir iş sürerken saklı bir boss'un zamanı geldi: uzun yaklaşma/Random döngülerinden çıkmak için. */
+    private class Interrupted : RuntimeException()
+
     private class MapInfo(val name: String, val wires: Int)
 
     /** İşaretlenmiş altın (golden) canavar noktası (ekran oranı). Golden haritası tek: goldMap ayarında tutulur. */
@@ -226,6 +229,8 @@ class TimerService : AccessibilityService() {
         )
 
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
+        private val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds")
+
         private fun profKey(k: String) = k.startsWith("cfg_") && k != "cfg_ntfy" && k != "cfg_maps"
 
         fun profileNames(p: android.content.SharedPreferences): List<String> =
@@ -240,6 +245,7 @@ class TimerService : AccessibilityService() {
                 if (v is Boolean) o.put(k, v) else if (v is String) o.put(k, v)
             }
             for (t in TOGGLES) if (!o.has("cfg_" + t.first)) o.put("cfg_" + t.first, t.third)
+            for (k in PROFILE_EXTRA) { val v = p.getString(k, null); if (v != null) o.put(k, v) }
             val names = profileNames(p).toMutableList()
             if (!names.contains(name)) names.add(name)
             p.edit().putString("profile_" + name, o.toString()).putString("profile_names", names.joinToString("\n"))
@@ -258,6 +264,7 @@ class TimerService : AccessibilityService() {
                 val v = o.get(k)
                 if (v is Boolean) e.putBoolean(k, v) else e.putString(k, v.toString())
             }
+            for (k in PROFILE_EXTRA) if (o.has(k)) e.putString(k, o.getString(k))
             e.putString("profile_active", name).apply()
             return true
         }
@@ -470,6 +477,7 @@ class TimerService : AccessibilityService() {
         closeBossWin()
         closeStopwatch()
         closeShortcuts()
+        closePick()
         cancel = true
         autoRunning = false
         worker?.interrupt()
@@ -1410,6 +1418,7 @@ class TimerService : AccessibilityService() {
 
     /** Haritayı açar ve harita açıkken alınmış ekran görüntüsünü döndürür. */
     private fun ensureMap(): Bitmap {
+        if (intrOn && dueNow()) throw Interrupted()
         for (i in 0 until 4) {
             val b = shot()
             if (b != null && mapOpen(b)) return b
@@ -1572,6 +1581,7 @@ class TimerService : AccessibilityService() {
         var retapped = false
         while (true) {
             pause(100)
+            if (intrOn && dueNow()) throw Interrupted()
             val bb = shot() ?: continue
             if (!orangeAt(bb, "closeMap")) {
                 tapPoint("minimap")
@@ -1849,11 +1859,24 @@ class TimerService : AccessibilityService() {
             switchTo(bw)
         }
         say("ATK/DEF düşük, buff noktasına gidiliyor")
+        ev("Buff'a gidiliyor", true, 3)
         openChatLink("buffLink")
-        pause(cfgI("buffTravel", 12) * 1000)
+        val tt0 = System.currentTimeMillis()
+        val travel = cfgI("buffTravel", 12) * 1000L
+        while (System.currentTimeMillis() - tt0 < travel) {
+            if (dueNow()) {
+                ev("Boss zamanı geldi, buff yolculuğu yarıda bırakıldı")
+                return
+            }
+            pause(500)
+        }
         val t0 = System.currentTimeMillis()
         val limit = cfgI("buffWait", 90) * 1000L
         while (System.currentTimeMillis() - t0 < limit) {
+            if (dueNow()) {
+                ev("Boss zamanı geldi, buff beklemesi bırakıldı")
+                return
+            }
             val b = shot()
             if (b != null) {
                 val st = readStats(b)
@@ -1877,9 +1900,13 @@ class TimerService : AccessibilityService() {
         val minA = cfgI("minAtk", 0)
         val minD = cfgI("minDef", 0)
         if (st == null) {
+            buffReadFails++
             say("ATK/DEF okunamadı: " + lastOcr)
+            ev("Buff: ATK/DEF okunamadı (" + buffReadFails + ")", buffReadFails == 3, 3)
             return
         }
+        buffReadFails = 0
+        ev("Buff kontrol: ATK " + st.first + " DEF " + st.second + " · eşik " + minA + "/" + minD)
         if (st.first < minA && st.second < minD) doBuff(minA, minD)
         else say("ATK " + st.first + " DEF " + st.second + " tamam")
     }
@@ -1937,7 +1964,7 @@ class TimerService : AccessibilityService() {
         for (n in listOf("chat", "pmTab", "autoAtk")) if (!hasPt(n) && !need.contains(n)) need.add(n)
         if (on("buffOn") && !hasPt("buffLink")) need.add("buffLink")
         if (on("goldOn")) {
-            if (!hasPt("goldLink")) need.add("goldLink")
+            if (!hasPt("goldLink") && !tpMacroOn(goldMapName())) need.add("goldLink")
             val gm = goldMapName()
             if (gm.isNotEmpty() && mapInfo(gm).wires > 1) {
                 val n = "wire" + cfgI("goldWire", 3)
@@ -1945,7 +1972,7 @@ class TimerService : AccessibilityService() {
                 if (!hasPt("switchBtn")) need.add("switchBtn")
             }
         }
-        if (on("redOn") && !hasPt("redLink")) need.add("redLink")
+        if (on("redOn") && !hasPt("redLink") && !tpMacroOn(redMapName())) need.add("redLink")
         if (on("routeOn")) {
             for (rm in routeSnapshot()) {
                 val l = "link_" + rm
@@ -2003,6 +2030,39 @@ class TimerService : AccessibilityService() {
         return best
     }
 
+    @Volatile private var intrOn = false
+    @Volatile private var buffNeeded = false
+    @Volatile private var buffReadFails = 0
+    private val recoverLog = ArrayList<Long>()
+
+    private fun dueNow(): Boolean = autoRunning && nextDue() != null
+
+    /** Savaş sırasında (kendi ekran görüntüsünden) buff süresine bakar; bittiyse savaşı bırakıp buff'a gitmek üzere işaretler. */
+    private fun fightBuff(b: Bitmap): Boolean {
+        if (!autoRunning || !on("buffOn")) return false
+        val now = System.currentTimeMillis()
+        if (now - lastBuffChk < cfgI("buffWatchSec", 45) * 1000L) return false
+        lastBuffChk = now
+        val st = readStats(b)
+        if (st == null) {
+            buffReadFails++
+            ev("Buff: ATK/DEF okunamadı (savaşta)")
+            return false
+        }
+        buffReadFails = 0
+        val minA = cfgI("minAtk", 0)
+        val minD = cfgI("minDef", 0)
+        ev("Buff kontrol (savaşta): ATK " + st.first + " DEF " + st.second + " · eşik " + minA + "/" + minD)
+        if (st.first < minA && st.second < minD) {
+            buffNeeded = true
+            ev("Buff bitti, savaş bırakılıp buff'a gidiliyor", true, 3)
+            setAuto(false)
+            say("Buff bitti, buff'a gidiliyor")
+            return true
+        }
+        return false
+    }
+
     @Volatile private var lastKillAt = 0L
     @Volatile private var lastKillTotal = 0
     @Volatile private var idleFarmUntil = 0L
@@ -2028,12 +2088,21 @@ class TimerService : AccessibilityService() {
                 val due = nextDue()
                 val recEvery = cfgI("recycleEvery", 20) * 60000L
                 val recDue = on("recycleOn") && now - lastRecycle >= recEvery
-                if (recDue && (due == null || now - lastRecycle - recEvery >= 300000L)) {
+                // Recycle ve pot savaş sırasında (fightMaint) yapılır; savaş yapılmıyorsa ya da çok gecikmişse boşta yapılır
+                val killMode = on("goldOn") || on("redOn") || on("routeOn")
+                val lateBy = if (killMode) 600000L else 0L
+                if (recDue && due == null && now - lastRecycle - recEvery >= lateBy) {
                     maintenance(recDue)
                     continue
                 }
                 if (due != null) {
                     runBoss(due)
+                    continue
+                }
+                if (buffNeeded) {
+                    buffNeeded = false
+                    lastBuffChk = now
+                    doBuff(cfgI("minAtk", 0), cfgI("minDef", 0))
                     continue
                 }
                 if (on("buffOn") && now - lastBuffChk >= cfgI("buffWatchSec", 45) * 1000L) {
@@ -2102,6 +2171,17 @@ class TimerService : AccessibilityService() {
                 farming = false
                 ui { rebuildList() }
                 say("Canlandın, kaldığın işe dönülüyor")
+            } catch (e: Interrupted) {
+                intrOn = false
+                ev("Boss zamanı geldi, yapılan iş bırakıldı")
+                try {
+                    if (gameAuto) setAuto(false)
+                    closeMapIfOpen()
+                } catch (x: Exception) {
+                }
+                goldHere = false
+                redHere = false
+                routeAt = false
             } catch (e: StepFail) {
                 fails++
                 goldHere = false
@@ -2115,9 +2195,44 @@ class TimerService : AccessibilityService() {
                 }
                 farming = false
                 if (fails >= 5) {
-                    ev("Üst üste 5 hata, otomasyon durdu", true, 5)
-                    say("Üst üste 5 hata, otomasyon durduruldu. Son mesaj yukarıda.")
-                    toast("Otomasyon durduruldu: üst üste 5 hata")
+                    val nowT = System.currentTimeMillis()
+                    recoverLog.removeAll { nowT - it > 3600000L }
+                    recoverLog.add(nowT)
+                    if (recoverLog.size >= 6) {
+                        ev("Bir saatte 6 kez üst üste 5 hata, otomasyon durdu", true, 5)
+                        say("Sürekli hata, otomasyon durduruldu. Son mesaj yukarıda.")
+                        toast("Otomasyon durduruldu: sürekli hata")
+                        autoRunning = false
+                        return
+                    }
+                    ev("Üst üste 5 hata, 30 sn bekleyip toparlanılıyor (" + recoverLog.size + "/6)", true, 4)
+                    say("Üst üste 5 hata, 30 sn sonra yeniden denenecek")
+                    try {
+                        closeMapIfOpen()
+                    } catch (x: Exception) {
+                    }
+                    gameAuto = false
+                    lastLink = ""
+                    pause(30000)
+                    fails = 0
+                }
+                pause(3000)
+            } catch (e: StopEx) {
+                throw e
+            } catch (e: LoggedOut) {
+                throw e
+            } catch (e: InterruptedException) {
+                throw e
+            } catch (e: Exception) {
+                fails++
+                goldHere = false
+                redHere = false
+                routeAt = false
+                farming = false
+                ev("Beklenmeyen hata: " + e.javaClass.simpleName + " " + (e.message ?: ""), true, 4)
+                say("Beklenmeyen hata, devam ediliyor: " + (e.message ?: e.javaClass.simpleName))
+                if (fails >= 8) {
+                    ev("Üst üste 8 beklenmeyen hata, otomasyon durdu", true, 5)
                     autoRunning = false
                     return
                 }
@@ -2554,6 +2669,12 @@ class TimerService : AccessibilityService() {
             return
         }
         applyProfile(prefs(), next)
+        loadGolds()
+        loadReds()
+        loadRoute()
+        resetRoute()
+        goldHere = false
+        redHere = false
         updateToggles()
         updateProfileBtn()
         radiusView?.text = cfgI("radius", 200).toString()
@@ -2704,11 +2825,13 @@ class TimerService : AccessibilityService() {
         }
         if (on("goldOn")) {
             head("GOLDEN")
+            buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (goldMapName().ifEmpty { "seç" }) + "  ▸" to { pickGoldMap() }))
             buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
             step("Golden wire'ı", "goldWire", 3, 1, 3) { 1 }
         }
         if (on("redOn")) {
             head("RED BOSS")
+            buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (redMapName().ifEmpty { "seç" }) + "  ▸" to { pickRedMap() }))
             buttons(listOf<Pair<String, () -> Unit>>("Red işaretle" to { runManual { redMark() } }, "Red listesi" to { toggleRedWin() }))
         }
         if (on("randomOn")) {
@@ -3897,14 +4020,20 @@ class TimerService : AccessibilityService() {
             }
             return
         }
-        if (!hasPt("goldLink")) fail("Önce 'Ayar' menüsünden işaretle: goldLink")
+        val useTp = tpMacroOn(gm)
+        if (!useTp && !hasPt("goldLink")) fail("Önce 'Ayar' menüsünden işaretle: goldLink (ya da Bakım'dan " + gm + " için ışınlanma kaydı yap ve Kayıtlı ışın'ı aç)")
         if (mapInfo(cur.first).wires > 1 && cur.second != gw) {
             say("Golden için Wire " + gw + " seçiliyor")
             switchTo(gw)
         }
         say("Golden haritasına gidiliyor")
-        openChatLink("goldLink")
-        pause(cfgI("mapTravel", 10) * 1000)
+        if (useTp) {
+            teleport(gm)
+            lastLink = "goldLink"
+        } else {
+            openChatLink("goldLink")
+            pause(cfgI("mapTravel", 10) * 1000)
+        }
         cur = readMapWireRetry()
         if (key(cur.first) != key(gm)) fail("Golden haritasına ışınlanılamadı, şu an: " + cur.first)
         if (mapInfo(gm).wires > 1 && cur.second != gw) {
@@ -3920,8 +4049,13 @@ class TimerService : AccessibilityService() {
     private fun runGold() {
         redHere = false
         routeAt = false
-        if (goldCycle(null)) fails = 0
-        else goldIdleUntil = System.currentTimeMillis() + cfgI("goldRetry", 15) * 1000L
+        intrOn = true
+        try {
+            if (goldCycle(null)) fails = 0
+            else goldIdleUntil = System.currentTimeMillis() + cfgI("goldRetry", 15) * 1000L
+        } finally {
+            intrOn = false
+        }
     }
 
     /**
@@ -4019,6 +4153,7 @@ class TimerService : AccessibilityService() {
                 return true
             }
             val b = shot() ?: continue
+            if (fightBuff(b)) return true
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -4380,14 +4515,20 @@ class TimerService : AccessibilityService() {
             }
             return
         }
-        if (!hasPt("redLink")) fail("Önce 'Ayar' menüsünden işaretle: redLink")
+        val useTp = tpMacroOn(gm)
+        if (!useTp && !hasPt("redLink")) fail("Önce 'Ayar' menüsünden işaretle: redLink (ya da Bakım'dan " + gm + " için ışınlanma kaydı yap ve Kayıtlı ışın'ı aç)")
         if (mapInfo(cur.first).wires > 1 && cur.second != gw) {
             say("Red boss için Wire " + gw + " seçiliyor")
             switchTo(gw)
         }
         say("Red boss haritasına gidiliyor")
-        openChatLink("redLink")
-        pause(cfgI("mapTravel", 10) * 1000)
+        if (useTp) {
+            teleport(gm)
+            lastLink = "redLink"
+        } else {
+            openChatLink("redLink")
+            pause(cfgI("mapTravel", 10) * 1000)
+        }
         cur = readMapWireRetry()
         if (key(cur.first) != key(gm)) fail("Red boss haritasına ışınlanılamadı, şu an: " + cur.first)
         if (mapInfo(gm).wires > 1 && cur.second != gw) {
@@ -4402,8 +4543,13 @@ class TimerService : AccessibilityService() {
     /** Otomasyondan: bir red boss turu; hiç red boss bulunamazsa bir süre red boss'a bakmaz. */
     private fun runRed() {
         goldHere = false
-        if (redCycle(null)) fails = 0
-        else redIdleUntil = System.currentTimeMillis() + cfgI("redRetry", 15) * 1000L
+        intrOn = true
+        try {
+            if (redCycle(null)) fails = 0
+            else redIdleUntil = System.currentTimeMillis() + cfgI("redRetry", 15) * 1000L
+        } finally {
+            intrOn = false
+        }
     }
 
     /**
@@ -4501,6 +4647,7 @@ class TimerService : AccessibilityService() {
                 return true
             }
             val b = shot() ?: continue
+            if (fightBuff(b)) return true
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -4832,6 +4979,15 @@ class TimerService : AccessibilityService() {
 
     /** Rotada bir adım: sıradaki haritanın sıradaki wire'ına gider (PM bağlantısı + wire), canlı boss kalmayana kadar keser, sonra sonraki wire/haritaya geçer. */
     private fun runRoute() {
+        intrOn = true
+        try {
+            runRouteInner()
+        } finally {
+            intrOn = false
+        }
+    }
+
+    private fun runRouteInner() {
         goldHere = false
         redHere = false
         if (farming) {
@@ -4946,6 +5102,7 @@ class TimerService : AccessibilityService() {
                 return true
             }
             val b = shot() ?: continue
+            if (fightBuff(b)) return true
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -5499,6 +5656,7 @@ class TimerService : AccessibilityService() {
                 return true
             }
             val b = shot() ?: continue
+            if (fightBuff(b)) return true
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -5924,6 +6082,88 @@ class TimerService : AccessibilityService() {
         swLp = lp
         updateSw()
         main.postDelayed(swTick, 100)
+    }
+
+    // ------------------------------------------------------------------ harita seçici (golden / red boss haritası)
+
+    private var pickWin: View? = null
+
+    private fun closePick() {
+        val w = pickWin ?: return
+        try {
+            wm.removeView(w)
+        } catch (e: Exception) {
+        }
+        pickWin = null
+    }
+
+    /** Kayıtlı harita listesinden bir harita seçtirir. Işınlanma kaydı olanların yanında ● görünür. */
+    private fun pickMap(title: String, current: String, onPick: (String) -> Unit) {
+        closePick()
+        refreshScreen()
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.background = framed(PANEL_BG, 18)
+        outer.setPadding(dp(18), dp(20), dp(18), dp(16))
+        val t = TextView(this)
+        t.text = title
+        t.textSize = 15f
+        t.letterSpacing = 0.06f
+        t.tag = "serif"
+        t.typeface = android.graphics.Typeface.SERIF
+        t.setTextColor(0xFFC9ADEB.toInt())
+        outer.addView(t)
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        val sv = ScrollView(this)
+        sv.addView(col)
+        outer.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.55f).toInt()).also { it.topMargin = dp(8) })
+        for (m in maps()) {
+            val rec = macroHas("tp_" + m.name)
+            val sel = key(m.name) == key(current)
+            val b = mkBtn((if (sel) "✓ " else "") + m.name + (if (rec) "   ●" else ""), if (sel) onFill() else CARD_BG) {
+                closePick()
+                onPick(m.name)
+            }
+            b.gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            col.addView(b, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38)).also { it.topMargin = dp(4) })
+        }
+        outer.addView(mkBtn("Kapat") { closePick() }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(38)).also { it.topMargin = dp(8) })
+        val w = minOf(dp(320), (screenW * 0.85f).toInt())
+        val lp = overlayParams(w)
+        lp.x = (screenW - w) / 2
+        lp.y = (screenH * 0.12f).toInt()
+        applyFont(outer)
+        wm.addView(outer, lp)
+        pickWin = outer
+    }
+
+    private fun pickGoldMap() {
+        pickMap("Golden haritası  (● = ışınlanma kaydı var)", goldMapName()) { name ->
+            val old = goldMapName()
+            if (old.isNotEmpty() && key(old) != key(name) && goldSnapshot().isNotEmpty()) {
+                synchronized(lock) { golds.clear() }
+                saveGolds()
+                toast("Golden haritası değişti, eski noktalar silindi. Golden işaretle ile yeniden seç.")
+            }
+            prefs().edit().putString("goldMap", name).apply()
+            goldHere = false
+            refreshHome()
+        }
+    }
+
+    private fun pickRedMap() {
+        pickMap("Red boss haritası  (● = ışınlanma kaydı var)", redMapName()) { name ->
+            val old = redMapName()
+            if (old.isNotEmpty() && key(old) != key(name) && redSnapshot().isNotEmpty()) {
+                synchronized(lock) { reds.clear() }
+                saveReds()
+                toast("Red boss haritası değişti, eski noktalar silindi. Red işaretle ile yeniden seç.")
+            }
+            prefs().edit().putString("redMap", name).apply()
+            redHere = false
+            refreshHome()
+        }
     }
 
     // ------------------------------------------------------------------ kısayollar penceresi
