@@ -208,7 +208,8 @@ class TimerService : AccessibilityService() {
             Triple("redOn", "Red boss", false),
             Triple("routeOn", "Rota", false),
             Triple("idleFarmOn", "Boşta farm", false),
-            Triple("macroTpOn", "Kayıtlı ışın", false)
+            Triple("macroTpOn", "Kayıtlı ışın", false),
+            Triple("protoOn", "Golden protokolü", true)
         )
 
         /** Kayıtlı tema numarası; Gotik temaya bir kez otomatik geçilir. */
@@ -2794,7 +2795,7 @@ class TimerService : AccessibilityService() {
         // KONTROL MERKEZİ: satır satır. Sağdaki anahtar aç/kapatır, soldaki isme basınca o seçeneğin ayarları açılır/kapanır.
         val icons = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield"
         )
         val cc = TextView(this)
         cc.text = "KONTROL MERKEZİ"
@@ -2866,6 +2867,18 @@ class TimerService : AccessibilityService() {
                 "idleFarmOn" -> {
                     step("Kesim yoksa (dk)", "idleFarmMin", 10, 0, 120) { 1 }
                     step("Farmda kal (dk)", "idleFarmStay", 10, 1, 120) { 1 }
+                }
+                "protoOn" -> {
+                    hint("Otomasyon hatayla durursa uyarı çıkar; reddetmezsen Golden, Pot, Recycle ve Diril açılır, Farm/Rota/Red/Boşta farm kapanır ve otomasyon yeniden başlar. Golden haritasına kayıtlı ışınlanmayla gidilir.")
+                    val gm = goldMapName()
+                    val rec = gm.isNotEmpty() && macroHas("tp_" + gm)
+                    hint("Harita: " + (gm.ifEmpty { "seçilmedi" }) + " · ışınlanma kaydı: " + (if (rec) "var" else "yok") + " · işaretli golden: " + goldSnapshot().size)
+                    buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (gm.ifEmpty { "seç" }) + "  ▸" to { pickGoldMap() }))
+                    buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
+                    step("Uyarı süresi (sn)", "protoSec", 10, 3, 60) { 1 }
+                    step("Tekrar bekleme (dk)", "protoCooldownMin", 15, 1, 120) { 5 }
+                    buttons(listOf<Pair<String, () -> Unit>>("Uyarıyla test" to { protoTest(true) }, "Hemen başlat" to { protoTest(false) }))
+                    hint("Test gerçekten çalışır: ayarları değiştirir ve otomasyonu başlatır (otomasyon kapalıyken).")
                 }
                 "macroTpOn" -> hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. Kayıtlar Bakım sekmesinde.")
                 else -> hint("Bu seçeneğin ek ayarı yok.")
@@ -6200,15 +6213,19 @@ class TimerService : AccessibilityService() {
     /** Otomasyon hata yüzünden durdu: uyarı verir, 10 sn içinde reddedilmezse Golden protokolünü uygular. */
     private fun errorStop(reason: String) {
         ev("Otomasyon hata ile durdu: " + reason, true, 5)
+        if (!on("protoOn")) {
+            ev("Golden protokolü kapalı, uygulanmıyor", true, 3)
+            return
+        }
         val now = System.currentTimeMillis()
-        if (now - lastProtoAt < 900000L) {
+        if (now - lastProtoAt < cfgI("protoCooldownMin", 15) * 60000L) {
             ev("Golden protokolü az önce uygulandı, tekrar denenmiyor", true, 4)
             return
         }
-        ui { showProtoWarning(reason) }
+        ui { showProtoWarning(reason, false) }
     }
 
-    private fun showProtoWarning(reason: String) {
+    private fun showProtoWarning(reason: String, test: Boolean) {
         closeProto()
         refreshScreen()
         val outer = LinearLayout(this)
@@ -6230,9 +6247,9 @@ class TimerService : AccessibilityService() {
         msg.setTextColor(Color.WHITE)
         msg.setPadding(0, dp(8), 0, dp(10))
         outer.addView(msg)
-        var left = 10
+        var left = cfgI("protoSec", 10).coerceIn(3, 60)
         fun label() {
-            msg.text = "Otomasyon hata verip durdu:\n" + reason + "\n\n" + left + " sn içinde Golden protokolü uygulanacak"
+            msg.text = (if (test) "TEST: " else "Otomasyon hata verip durdu:") + "\n" + reason + "\n\n" + left + " sn içinde Golden protokolü uygulanacak"
         }
         label()
         outer.addView(mkBtn("Reddet") {
@@ -6251,7 +6268,7 @@ class TimerService : AccessibilityService() {
                 left--
                 if (left <= 0) {
                     closeProto()
-                    runGoldenProtocol()
+                    runGoldenProtocol(test)
                 } else {
                     label()
                     main.postDelayed(this, 1000)
@@ -6263,12 +6280,22 @@ class TimerService : AccessibilityService() {
     }
 
     /** Golden protokolü: seçili golden haritasında işaretli noktaları sırayla keser. Golden, Pot, Recycle ve Diril açık; rota, red, farm, boşta farm kapalı. Otomasyon yeniden başlar. */
-    private fun runGoldenProtocol() {
+    /** Menüdeki test düğmeleri: uyarıyla (geri sayım + Reddet) ya da hemen. */
+    private fun protoTest(withWarning: Boolean) {
+        if (autoRunning || busy) {
+            say("Otomasyon çalışıyor. Önce durdur, sonra test et.")
+            toast("Önce otomasyonu durdur")
+            return
+        }
+        if (withWarning) ui { showProtoWarning("test", true) } else runGoldenProtocol(true)
+    }
+
+    private fun runGoldenProtocol(test: Boolean = false) {
         if (autoRunning || busy) {
             ev("Golden protokolü: otomasyon zaten çalışıyor", true, 3)
             return
         }
-        lastProtoAt = System.currentTimeMillis()
+        if (!test) lastProtoAt = System.currentTimeMillis()
         val e = prefs().edit()
         for (k in listOf("routeOn", "redOn", "farmOn", "idleFarmOn")) e.putBoolean("cfg_" + k, false)
         e.putBoolean("cfg_goldOn", true).putBoolean("cfg_potOn", true).putBoolean("cfg_recycleOn", true).putBoolean("cfg_reviveOn", true).apply()
@@ -6415,7 +6442,7 @@ class TimerService : AccessibilityService() {
         l.add(ScItem("sw", "Kronometre", "stopwatch") { toggleStopwatch() })
         val ic = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield"
         )
         for (t in TOGGLES) l.add(ScItem("t:" + t.first, t.second, ic[t.first] ?: "dice") {
             prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
