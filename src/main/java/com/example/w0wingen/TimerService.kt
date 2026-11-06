@@ -1629,7 +1629,12 @@ class TimerService : AccessibilityService() {
     }
 
     /** Haritaya ışınlanma kaydı varsa ve "Kayıtlı ışın" açıksa true. */
-    private fun tpMacroOn(map: String): Boolean = cfgB("macroTpOn", false) && macroHas("tp_" + map)
+    private fun tpMacroOn(map: String): Boolean =
+        (cfgB("macroTpOn", false) || (protoGold && key(map) == key(goldMapName()))) && macroHas("tp_" + map)
+
+    /** Golden protokolü çalışırken golden haritasına, "Kayıtlı ışın" kapalı olsa da kayıtlı ışınlanmayla gidilir. */
+    @Volatile private var protoGold = false
+    @Volatile private var protoStarting = false
 
     private fun teleport(map: String) {
         if (tpMacroOn(map)) {
@@ -2004,6 +2009,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun startAuto() {
+        if (protoStarting) protoStarting = false else protoGold = false
         if (busy) {
             say("Başka bir işlem sürüyor")
             return
@@ -6183,7 +6189,11 @@ class TimerService : AccessibilityService() {
         redHere = false
         routeAt = false
         updateToggles()
+        val gm = goldMapName()
+        if (gm.isNotEmpty() && !macroHas("tp_" + gm)) ev("Uyarı: " + gm + " için ışınlanma kaydı yok, chat'ten gidilecek", true, 4)
         ev("Golden protokolü uygulandı, otomasyon başlatılıyor", true, 4)
+        protoGold = true
+        protoStarting = true
         startAuto()
     }
 
