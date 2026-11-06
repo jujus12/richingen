@@ -5515,7 +5515,12 @@ class TimerService : AccessibilityService() {
         var dy = 0f
         var dt = 0L
         var lastEnd = SystemClock.elapsedRealtime() - 1500L
+        // Oyuna iletilen dokunuş kısa süre katmana da düşebilir; bu pencerede gelen dokunuşlar kayda alınmaz (çift sayımı önler)
+        var ignoreUntil = 0L
+        var skipThis = false
         v.setOnTouchListener { _, ev ->
+            if (ev.actionMasked == MotionEvent.ACTION_DOWN) skipThis = SystemClock.elapsedRealtime() < ignoreUntil
+            if (skipThis) return@setOnTouchListener true
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     dx = ev.rawX
@@ -5529,6 +5534,8 @@ class TimerService : AccessibilityService() {
                     val dur = now - dt
                     val gap = dt - lastEnd
                     lastEnd = now
+                    val isTap = Math.abs(ux - dx) < 30f && Math.abs(uy - dy) < 30f && dur < 200L
+                    ignoreUntil = now + (if (isTap) 0L else dur.coerceIn(60L, 3000L)) + 450L
                     recList.add(Gest(dx / screenW, dy / screenH, ux / screenW, uy / screenH, dur, gap))
                     updateRecInfo()
                     val x1 = dx
