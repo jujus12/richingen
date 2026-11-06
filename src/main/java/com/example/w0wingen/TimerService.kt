@@ -2699,6 +2699,7 @@ class TimerService : AccessibilityService() {
     // ------------------------------------------------------------------ Ana sekme: seçili profilde AÇIK olan seçenekler tek ekranda
 
     private var homeBox: LinearLayout? = null
+    private var homeOpen = ""
 
     private fun refreshHome() {
         val hb = homeBox ?: return
@@ -2790,25 +2791,11 @@ class TimerService : AccessibilityService() {
             box.addView(hs, lpTop(dp(38)))
         }
 
-        // KONTROL MERKEZİ: açık/kapalı kutuları ve eylemler
+        // KONTROL MERKEZİ: satır satır. Sağdaki anahtar aç/kapatır, soldaki isme basınca o seçeneğin ayarları açılır/kapanır.
         val icons = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
             "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin"
         )
-        fun tileRow(items: List<Triple<String, String, Pair<Boolean?, () -> Unit>>>) {
-            for (chunk in items.chunked(3)) {
-                val row = LinearLayout(this)
-                row.orientation = LinearLayout.HORIZONTAL
-                for ((j, it) in chunk.withIndex()) {
-                    val tile = mkTile(it.first, it.second, it.third.first, dp(72), it.third.second)
-                    val tl = LinearLayout.LayoutParams(0, dp(72), 1f)
-                    if (j > 0) tl.leftMargin = dp(5)
-                    row.addView(tile, tl)
-                }
-                for (j in chunk.size until 3) row.addView(View(this), LinearLayout.LayoutParams(0, dp(72), 1f).also { it.leftMargin = dp(5) })
-                box.addView(row, lpTop())
-            }
-        }
         val cc = TextView(this)
         cc.text = "KONTROL MERKEZİ"
         cc.textSize = 11f
@@ -2816,37 +2803,137 @@ class TimerService : AccessibilityService() {
         cc.typeface = android.graphics.Typeface.DEFAULT_BOLD
         cc.setPadding(0, dp(10), 0, 0)
         box.addView(cc)
-        tileRow(TOGGLES.map { t ->
-            Triple(icons[t.first] ?: "dice", t.second, Pair<Boolean?, () -> Unit>(on(t.first)) {
-                prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
-                updateToggles()
-            })
-        })
 
-        if (on("farmOn")) {
-            head("FARM")
-            step("Farm wire'ı", "farmWire", 3, 1, 3) { 1 }
-            step("Varış bekleme (sn)", "farmWait", 10, 0, 60) { 5 }
+        fun hint(t: String) {
+            val h = TextView(this)
+            h.text = t
+            h.textSize = 11f
+            h.setTextColor(TEXT_DIM)
+            cur.addView(h, lpTop())
         }
-        if (on("routeOn")) {
-            head("ROTA")
-            buttons(listOf<Pair<String, () -> Unit>>("Rota listesi" to { toggleRouteWin() }, "Gizli nokta" to { runManual { hiddenMark() } }, "Yoksay" to { runManual { ignoreMark() } }, "Canlı boss kaydet" to { runManual { doSaveAlive() } }))
+
+        fun settingsFor(key: String) {
+            when (key) {
+                "potOn" -> {
+                    step("Pot eşiği", "potMin", 20, 0, 999) { 5 }
+                    step("Pot okuma (sn)", "potWatchSec", 60, 10, 600) { 10 }
+                }
+                "recycleOn" -> {
+                    step("Her kaç kesimde Recycle (0=kapalı)", "recycleKillEvery", 0, 0, 50) { 1 }
+                    step("Recycle aralığı (dk)", "recycleEvery", 20, 1, 240) { 5 }
+                }
+                "farmOn" -> {
+                    step("Farm wire'ı", "farmWire", 3, 1, 3) { 1 }
+                    step("Varış bekleme (sn)", "farmWait", 10, 0, 60) { 5 }
+                }
+                "reviveOn" -> {
+                    step("Aynı boss'ta ölüm sınırı", "deathLimit", 3, 1, 20) { 1 }
+                    step("Sınırda atlama süresi (dk)", "deathBlockMin", 15, 1, 120) { 5 }
+                }
+                "buffOn" -> {
+                    val bs = mkBtn("Adım: " + prefs().getInt("buffStep", 1000) + "  ▸") { }
+                    bs.setOnClickListener {
+                        val c = prefs().getInt("buffStep", 1000)
+                        prefs().edit().putInt("buffStep", when (c) { 100 -> 1000; 1000 -> 10000; else -> 100 }).apply()
+                        refreshHome()
+                    }
+                    cur.addView(bs, lpTop(dp(34)))
+                    step("Minimum ATK", "minAtk", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
+                    step("Minimum DEF", "minDef", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
+                    step("Buff wire'ı", "buffWire", 3, 1, 3) { 1 }
+                    step("Buff kontrol aralığı (sn)", "buffWatchSec", 45, 10, 600) { 5 }
+                }
+                "randomOn" -> {
+                    step("Random yarıçap (px) · tüm modlar", "radius", 200, 0, 1000) { 25 }
+                    step("En fazla Random", "randomMax", 40, 1, 200) { 5 }
+                }
+                "goldOn" -> {
+                    buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (goldMapName().ifEmpty { "seç" }) + "  ▸" to { pickGoldMap() }))
+                    buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
+                    step("Golden wire'ı", "goldWire", 3, 1, 3) { 1 }
+                    step("Golden yeniden bakma (sn)", "goldRetry", 15, 1, 600) { 5 }
+                }
+                "redOn" -> {
+                    buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (redMapName().ifEmpty { "seç" }) + "  ▸" to { pickRedMap() }))
+                    buttons(listOf<Pair<String, () -> Unit>>("Red işaretle" to { runManual { redMark() } }, "Red listesi" to { toggleRedWin() }))
+                    step("Red boss wire'ı", "redWire", 1, 1, 3) { 1 }
+                    step("Red yeniden bakma (sn)", "redRetry", 15, 1, 600) { 5 }
+                }
+                "routeOn" -> {
+                    buttons(listOf<Pair<String, () -> Unit>>("Rota listesi" to { toggleRouteWin() }, "Canlı boss kaydet" to { runManual { doSaveAlive() } }))
+                    buttons(listOf<Pair<String, () -> Unit>>("Gizli nokta" to { runManual { hiddenMark() } }, "Yoksay" to { runManual { ignoreMark() } }))
+                }
+                "idleFarmOn" -> {
+                    step("Kesim yoksa (dk)", "idleFarmMin", 10, 0, 120) { 1 }
+                    step("Farmda kal (dk)", "idleFarmStay", 10, 1, 120) { 1 }
+                }
+                "macroTpOn" -> hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. Kayıtlar Bakım sekmesinde.")
+                else -> hint("Bu seçeneğin ek ayarı yok.")
+            }
         }
-        if (on("goldOn")) {
-            head("GOLDEN")
-            buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (goldMapName().ifEmpty { "seç" }) + "  ▸" to { pickGoldMap() }))
-            buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
-            step("Golden wire'ı", "goldWire", 3, 1, 3) { 1 }
+
+        for (t in TOGGLES) {
+            val key = t.first
+            val isOn = on(key)
+            val isOpen = homeOpen == key
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = card(CARD_BG, 14, if (isOpen) ACCENT else 0xFF332D40.toInt())
+            // sol: simge + isim (ayarları aç/kapat)
+            val left = LinearLayout(this)
+            left.orientation = LinearLayout.HORIZONTAL
+            left.gravity = Gravity.CENTER_VERTICAL
+            left.setPadding(dp(12), 0, dp(6), 0)
+            left.addView(IconView(this, icons[key] ?: "dice", if (isOn) Color.WHITE else 0xFF8D8798.toInt()), LinearLayout.LayoutParams(dp(28), dp(28)))
+            val name = TextView(this)
+            name.text = t.second
+            name.textSize = 15f
+            name.setTextColor(if (isOn) Color.WHITE else TEXT_DIM)
+            left.addView(name, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(12) })
+            val chev = TextView(this)
+            chev.text = if (isOpen) "⌄" else "›"
+            chev.textSize = 18f
+            chev.setTextColor(TEXT_DIM)
+            left.addView(chev)
+            left.setOnClickListener {
+                homeOpen = if (homeOpen == key) "" else key
+                refreshHome()
+            }
+            row.addView(left, LinearLayout.LayoutParams(0, dp(52), 1f))
+            // sağ: aç/kapat anahtarı
+            val sw = FrameLayout(this)
+            sw.background = rounded(if (isOn) 0xFF6A2FB0.toInt() else 0xFF3A3544.toInt(), 14)
+            val knob = View(this)
+            knob.background = rounded(Color.WHITE, 12)
+            sw.addView(knob, FrameLayout.LayoutParams(dp(22), dp(22)).also {
+                it.gravity = (if (isOn) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
+                it.leftMargin = dp(3)
+                it.rightMargin = dp(3)
+            })
+            val swWrap = FrameLayout(this)
+            swWrap.setPadding(dp(8), 0, dp(12), 0)
+            swWrap.addView(sw, FrameLayout.LayoutParams(dp(48), dp(28), Gravity.CENTER))
+            swWrap.setOnClickListener {
+                prefs().edit().putBoolean("cfg_" + key, !on(key)).apply()
+                updateToggles()
+            }
+            row.addView(swWrap, LinearLayout.LayoutParams(dp(68), dp(52)))
+            box.addView(row, lpTop())
+            if (isOpen) {
+                val panelBox = LinearLayout(this)
+                panelBox.orientation = LinearLayout.VERTICAL
+                panelBox.background = card(0x22FFFFFF, 12, 0xFF2A2533.toInt())
+                panelBox.setPadding(dp(12), dp(4), dp(12), dp(10))
+                val lp2 = LinearLayout.LayoutParams(full, wrap)
+                lp2.topMargin = dp(3)
+                box.addView(panelBox, lp2)
+                cur = panelBox
+                settingsFor(key)
+                cur = box
+            }
         }
-        if (on("redOn")) {
-            head("RED BOSS")
-            buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (redMapName().ifEmpty { "seç" }) + "  ▸" to { pickRedMap() }))
-            buttons(listOf<Pair<String, () -> Unit>>("Red işaretle" to { runManual { redMark() } }, "Red listesi" to { toggleRedWin() }))
-        }
-        if (on("randomOn")) {
-            head("RANDOM")
-            step("Random yarıçap (px) · tüm modlar", "radius", 200, 0, 1000) { 25 }
-        }
+
         applyFont(box)
     }
 
