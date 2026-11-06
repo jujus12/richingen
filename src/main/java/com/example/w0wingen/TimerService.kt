@@ -6169,7 +6169,7 @@ class TimerService : AccessibilityService() {
         main.postDelayed(tick, 1000)
     }
 
-    /** Golden protokolü: yalnızca Golden açık (rota, red, farm, boşta farm kapalı) ve otomasyon yeniden başlar. */
+    /** Golden protokolü: seçili golden haritasında işaretli noktaları sırayla keser. Golden, Pot, Recycle ve Diril açık; rota, red, farm, boşta farm kapalı. Otomasyon yeniden başlar. */
     private fun runGoldenProtocol() {
         if (autoRunning || busy) {
             ev("Golden protokolü: otomasyon zaten çalışıyor", true, 3)
@@ -6178,7 +6178,7 @@ class TimerService : AccessibilityService() {
         lastProtoAt = System.currentTimeMillis()
         val e = prefs().edit()
         for (k in listOf("routeOn", "redOn", "farmOn", "idleFarmOn")) e.putBoolean("cfg_" + k, false)
-        e.putBoolean("cfg_goldOn", true).apply()
+        e.putBoolean("cfg_goldOn", true).putBoolean("cfg_potOn", true).putBoolean("cfg_recycleOn", true).putBoolean("cfg_reviveOn", true).apply()
         goldHere = false
         redHere = false
         routeAt = false
