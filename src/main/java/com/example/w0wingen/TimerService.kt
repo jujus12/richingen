@@ -478,6 +478,7 @@ class TimerService : AccessibilityService() {
         closeStopwatch()
         closeShortcuts()
         closePick()
+        closeProto()
         cancel = true
         autoRunning = false
         worker?.interrupt()
@@ -1457,6 +1458,7 @@ class TimerService : AccessibilityService() {
             } catch (e: InterruptedException) {
             } catch (e: Exception) {
                 say("Hata: " + e.message)
+                if (autoRunning) errorStop("beklenmeyen hata: " + (e.message ?: e.javaClass.simpleName))
             }
             busy = false
             autoRunning = false
@@ -2203,6 +2205,7 @@ class TimerService : AccessibilityService() {
                         say("Sürekli hata, otomasyon durduruldu. Son mesaj yukarıda.")
                         toast("Otomasyon durduruldu: sürekli hata")
                         autoRunning = false
+                        errorStop("bir saatte 6 kez üst üste 5 hata")
                         return
                     }
                     ev("Üst üste 5 hata, 30 sn bekleyip toparlanılıyor (" + recoverLog.size + "/6)", true, 4)
@@ -2232,8 +2235,8 @@ class TimerService : AccessibilityService() {
                 ev("Beklenmeyen hata: " + e.javaClass.simpleName + " " + (e.message ?: ""), true, 4)
                 say("Beklenmeyen hata, devam ediliyor: " + (e.message ?: e.javaClass.simpleName))
                 if (fails >= 8) {
-                    ev("Üst üste 8 beklenmeyen hata, otomasyon durdu", true, 5)
                     autoRunning = false
+                    errorStop("üst üste 8 beklenmeyen hata: " + (e.message ?: e.javaClass.simpleName))
                     return
                 }
                 pause(3000)
@@ -6082,6 +6085,106 @@ class TimerService : AccessibilityService() {
         swLp = lp
         updateSw()
         main.postDelayed(swTick, 100)
+    }
+
+    // ------------------------------------------------------------------ hata sonrası Golden protokolü
+
+    private var protoWin: View? = null
+    private var protoTick: Runnable? = null
+    @Volatile private var lastProtoAt = 0L
+
+    private fun closeProto() {
+        protoTick?.let { main.removeCallbacks(it) }
+        protoTick = null
+        val w = protoWin ?: return
+        try {
+            wm.removeView(w)
+        } catch (e: Exception) {
+        }
+        protoWin = null
+    }
+
+    /** Otomasyon hata yüzünden durdu: uyarı verir, 10 sn içinde reddedilmezse Golden protokolünü uygular. */
+    private fun errorStop(reason: String) {
+        ev("Otomasyon hata ile durdu: " + reason, true, 5)
+        val now = System.currentTimeMillis()
+        if (now - lastProtoAt < 900000L) {
+            ev("Golden protokolü az önce uygulandı, tekrar denenmiyor", true, 4)
+            return
+        }
+        ui { showProtoWarning(reason) }
+    }
+
+    private fun showProtoWarning(reason: String) {
+        closeProto()
+        refreshScreen()
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.background = framed(PANEL_BG, 18)
+        outer.setPadding(dp(20), dp(22), dp(20), dp(18))
+        val t = TextView(this)
+        t.text = "GOLDEN PROTOKOLÜ"
+        t.textSize = 16f
+        t.letterSpacing = 0.08f
+        t.gravity = Gravity.CENTER
+        t.tag = "serif"
+        t.typeface = android.graphics.Typeface.SERIF
+        t.setTextColor(0xFFC9ADEB.toInt())
+        outer.addView(t)
+        val msg = TextView(this)
+        msg.textSize = 13f
+        msg.gravity = Gravity.CENTER
+        msg.setTextColor(Color.WHITE)
+        msg.setPadding(0, dp(8), 0, dp(10))
+        outer.addView(msg)
+        var left = 10
+        fun label() {
+            msg.text = "Otomasyon hata verip durdu:\n" + reason + "\n\n" + left + " sn içinde Golden protokolü uygulanacak"
+        }
+        label()
+        outer.addView(mkBtn("Reddet") {
+            closeProto()
+            ev("Golden protokolü reddedildi", true, 3)
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)))
+        val w = minOf(dp(300), (screenW * 0.85f).toInt())
+        val lp = overlayParams(w)
+        lp.x = (screenW - w) / 2
+        lp.y = (screenH * 0.2f).toInt()
+        applyFont(outer)
+        wm.addView(outer, lp)
+        protoWin = outer
+        val tick = object : Runnable {
+            override fun run() {
+                left--
+                if (left <= 0) {
+                    closeProto()
+                    runGoldenProtocol()
+                } else {
+                    label()
+                    main.postDelayed(this, 1000)
+                }
+            }
+        }
+        protoTick = tick
+        main.postDelayed(tick, 1000)
+    }
+
+    /** Golden protokolü: yalnızca Golden açık (rota, red, farm, boşta farm kapalı) ve otomasyon yeniden başlar. */
+    private fun runGoldenProtocol() {
+        if (autoRunning || busy) {
+            ev("Golden protokolü: otomasyon zaten çalışıyor", true, 3)
+            return
+        }
+        lastProtoAt = System.currentTimeMillis()
+        val e = prefs().edit()
+        for (k in listOf("routeOn", "redOn", "farmOn", "idleFarmOn")) e.putBoolean("cfg_" + k, false)
+        e.putBoolean("cfg_goldOn", true).apply()
+        goldHere = false
+        redHere = false
+        routeAt = false
+        updateToggles()
+        ev("Golden protokolü uygulandı, otomasyon başlatılıyor", true, 4)
+        startAuto()
     }
 
     // ------------------------------------------------------------------ harita seçici (golden / red boss haritası)
