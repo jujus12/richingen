@@ -230,7 +230,7 @@ class TimerService : AccessibilityService() {
         )
 
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
-        private val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds")
+        val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds")
 
         private fun profKey(k: String) = k.startsWith("cfg_") && k != "cfg_ntfy" && k != "cfg_maps"
 
@@ -268,6 +268,19 @@ class TimerService : AccessibilityService() {
             for (k in PROFILE_EXTRA) if (o.has(k)) e.putString(k, o.getString(k))
             e.putString("profile_active", name).apply()
             return true
+        }
+
+        /** Aktif profilin rota/harita/golden/red bölümünü şu anki değerlerle günceller. */
+        fun syncActiveExtras(p: android.content.SharedPreferences) {
+            val a = p.getString("profile_active", "") ?: ""
+            if (a.isEmpty()) return
+            val js = p.getString("profile_" + a, null) ?: return
+            try {
+                val o = org.json.JSONObject(js)
+                for (k in PROFILE_EXTRA) { val v = p.getString(k, null); if (v != null) o.put(k, v) else o.remove(k) }
+                p.edit().putString("profile_" + a, o.toString()).apply()
+            } catch (e: Exception) {
+            }
         }
 
         fun deleteProfile(p: android.content.SharedPreferences, name: String) {
@@ -449,6 +462,26 @@ class TimerService : AccessibilityService() {
 
     // ------------------------------------------------------------------ yasam dongusu
 
+    private var prefListener: android.content.SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    /** Profil değişince (uygulamadan ya da panelden) rota/golden/red listeleri bellekte yenilenir; bu listelerdeki değişiklikler aktif profile yazılır. */
+    private fun registerProfileSync() {
+        val l = android.content.SharedPreferences.OnSharedPreferenceChangeListener { sp, key ->
+            if (key == "profile_active") {
+                loadGolds()
+                loadReds()
+                loadRoute()
+                resetRoute()
+                goldHere = false
+                redHere = false
+            } else if (key != null && PROFILE_EXTRA.contains(key)) {
+                syncActiveExtras(sp)
+            }
+        }
+        prefListener = l
+        prefs().registerOnSharedPreferenceChangeListener(l)
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -459,6 +492,7 @@ class TimerService : AccessibilityService() {
         loadGolds()
         loadReds()
         loadRoute()
+        registerProfileSync()
         buildUi()
         rebuildList()
         main.postDelayed(ticker, 1000)
@@ -480,6 +514,7 @@ class TimerService : AccessibilityService() {
         closeShortcuts()
         closePick()
         closeProto()
+        prefListener?.let { prefs().unregisterOnSharedPreferenceChangeListener(it) }
         cancel = true
         autoRunning = false
         worker?.interrupt()
@@ -1446,6 +1481,9 @@ class TimerService : AccessibilityService() {
         }
         busy = true
         cancel = false
+        stopReported = false
+        stopWhy = "otomasyon kendiliğinden durdu"
+        val wasAuto = autoRunning
         val wasOpen = panelOpen
         panelOpen = false
         updateUi()
@@ -1454,15 +1492,21 @@ class TimerService : AccessibilityService() {
                 block()
             } catch (e: StopEx) {
             } catch (e: StepFail) {
+                stopWhy = "adım hatası"
             } catch (e: Revived) {
+                stopWhy = "karakter öldü"
             } catch (e: LoggedOut) {
+                stopWhy = "oyundan atıldı"
             } catch (e: InterruptedException) {
             } catch (e: Exception) {
                 say("Hata: " + e.message)
-                if (autoRunning) errorStop("beklenmeyen hata: " + (e.message ?: e.javaClass.simpleName))
+                stopWhy = "beklenmeyen hata: " + (e.message ?: e.javaClass.simpleName)
+                if (autoRunning) errorStop(stopWhy)
             }
+            val selfStopped = wasAuto && !cancel && !stopReported
             busy = false
             autoRunning = false
+            if (selfStopped) errorStop(stopWhy)
             ui {
                 panelOpen = wasOpen
                 updateUi()
@@ -6218,7 +6262,11 @@ class TimerService : AccessibilityService() {
     }
 
     /** Otomasyon hata yüzünden durdu: uyarı verir, 10 sn içinde reddedilmezse Golden protokolünü uygular. */
+    @Volatile private var stopReported = false
+    @Volatile private var stopWhy = ""
+
     private fun errorStop(reason: String) {
+        stopReported = true
         ev("Otomasyon hata ile durdu: " + reason, true, 5)
         if (!on("protoOn")) {
             ev("Golden protokolü kapalı, uygulanmıyor", true, 3)
@@ -6657,16 +6705,92 @@ class TimerService : AccessibilityService() {
         return sb.toString()
     }
 
+    private fun findProfile(arg: String): String? =
+        profileNames(prefs()).firstOrNull { it.equals(arg.trim(), ignoreCase = true) }
+
+    private fun findToggle(arg: String): Triple<String, String, Boolean>? {
+        val a = arg.trim().lowercase()
+        if (a.isEmpty()) return null
+        return TOGGLES.firstOrNull { it.second.lowercase() == a || it.first.lowercase() == a || it.first.lowercase() == a + "on" }
+    }
+
     private fun handleCmd(cmd: String) {
         val tp = topic()
-        when (cmd.trim().lowercase()) {
+        val raw = cmd.trim()
+        val first = raw.lowercase().substringBefore(' ')
+        val arg = raw.substringAfter(' ', "").trim()
+        when (first) {
             "durum", "?", "status" -> push(statusText(), 3)
             "log", "günlük", "gunluk" -> {
                 val l = synchronized(evLog) { evLog.toList().takeLast(30) }
                 push(if (l.isEmpty()) "Günlük boş" else l.joinToString("\n"), 3)
             }
             "ekran", "screen" -> Thread { sendScreen(tp) }.start()
-            else -> push("Komutlar: durum · log · ekran", 2)
+            "profiller", "profiles" -> {
+                val a = prefs().getString("profile_active", "") ?: ""
+                val n = profileNames(prefs())
+                push(if (n.isEmpty()) "Kayıtlı profil yok" else n.joinToString("\n") { (if (it == a) "● " else "○ ") + it }, 3)
+            }
+            "profil", "profile" -> {
+                val n = findProfile(arg)
+                if (n == null) push("Profil bulunamadı: " + arg + "\nKayıtlılar için: profiller", 3)
+                else ui {
+                    if (autoRunning || busy) push("Otomasyon açık, önce 'durdur' yaz", 3)
+                    else {
+                        loadProfile(n)
+                        push("Profil yüklendi: " + n + "\nBaşlatmak için: başlat", 3)
+                    }
+                }
+            }
+            "başlat", "baslat", "start" -> ui {
+                if (arg.isNotEmpty()) {
+                    val n = findProfile(arg)
+                    if (n == null) {
+                        push("Profil bulunamadı: " + arg + "\nKayıtlılar için: profiller", 3)
+                        return@ui
+                    }
+                    if (autoRunning || busy) {
+                        push("Otomasyon açık, önce 'durdur' yaz", 3)
+                        return@ui
+                    }
+                    loadProfile(n)
+                }
+                if (autoRunning) {
+                    push("Otomasyon zaten çalışıyor", 3)
+                    return@ui
+                }
+                val need = missingForAuto()
+                if (need.isNotEmpty()) {
+                    push("Başlatılamadı, eksik nokta: " + need.joinToString(", "), 4)
+                    return@ui
+                }
+                startAuto()
+                push("Otomasyon başlatıldı" + (if (arg.isNotEmpty()) " · profil: " + arg else ""), 3)
+            }
+            "durdur", "dur", "stop" -> {
+                if (autoRunning || busy) {
+                    stopJob()
+                    push("Durduruldu", 3)
+                } else push("Zaten durmuş", 2)
+            }
+            "seçenekler", "secenekler", "options" -> push(TOGGLES.joinToString("\n") { (if (on(it.first)) "✓ " else "✗ ") + it.second }, 3)
+            "aç", "ac", "kapat" -> {
+                val t = findToggle(arg)
+                if (t == null) push("Seçenek bulunamadı: " + arg + "\nListe için: seçenekler", 3)
+                else {
+                    val want = first != "kapat"
+                    prefs().edit().putBoolean("cfg_" + t.first, want).apply()
+                    ui { updateToggles() }
+                    push(t.second + ": " + (if (want) "AÇIK" else "KAPALI"), 3)
+                }
+            }
+            "iptal", "reddet", "cancel" -> ui {
+                if (protoWin != null) {
+                    closeProto()
+                    ev("Golden protokolü uzaktan reddedildi", true, 3)
+                } else push("Reddedilecek bir şey yok", 2)
+            }
+            else -> push("Komutlar: durum · log · ekran · profiller · profil <ad> · başlat [profil] · durdur · seçenekler · aç <seçenek> · kapat <seçenek> · reddet", 2)
         }
     }
 
