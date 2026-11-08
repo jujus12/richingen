@@ -3027,6 +3027,8 @@ class TimerService : AccessibilityService() {
             }
         }
 
+        head("BOSS ZAMANI")
+        step("Bossa kaç sn kala git", "leadSec", 20, 0, 300) { 5 }
         applyFont(box)
     }
 
