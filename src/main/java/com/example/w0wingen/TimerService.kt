@@ -213,7 +213,8 @@ class TimerService : AccessibilityService() {
             Triple("idleFarmOn", "Boşta farm", false),
             Triple("macroTpOn", "Kayıtlı ışın", false),
             Triple("protoOn", "Golden protokolü", true),
-            Triple("ownerOn", "Sahip kontrolü", false)
+            Triple("ownerOn", "Sahip kontrolü", false),
+            Triple("popupOn", "Pencere kapatıcı", false)
         )
 
         /** Kayıtlı tema numarası; Gotik temaya bir kez otomatik geçilir. */
@@ -878,7 +879,177 @@ class TimerService : AccessibilityService() {
         }
         if (b != null && autoRunning && on("reviveOn") && deathScreen(b) && deathConfirmed(b)) revive()
         if (b != null && autoRunning && loginScreen(b)) loggedOut()
+        if (b != null && autoRunning && on("popupOn")) popupScan(b, false)
         return b
+    }
+
+    // ---- Açılır pencere kapatıcı ----
+    private class Popup(val x: Float, val y: Float, val sig: IntArray)
+    private val popupStreak = HashMap<Int, Int>()
+    @Volatile private var popupLastScan = 0L
+    @Volatile private var popupCool = 0L
+
+    private fun popupList(): List<Popup> {
+        val out = ArrayList<Popup>()
+        val raw = prefs().getString("popups", "") ?: ""
+        for (it in raw.split(";")) {
+            val f = it.split(",")
+            if (f.size < 3 + 48) continue
+            try {
+                out.add(Popup(f[0].toFloat(), f[1].toFloat(), IntArray(48) { i -> f[2 + i].toInt() }))
+            } catch (e: Exception) {
+            }
+        }
+        return out
+    }
+
+    /** Noktanın çevresini 4x4 hücreye böler, her hücrenin ortalama R,G,B değerini verir (48 sayı). */
+    private fun popupSig(b: Bitmap, x: Float, y: Float): IntArray {
+        val cx = x * b.width
+        val cy = y * b.height
+        val hw = 0.022f * b.width
+        val hh = 0.038f * b.height
+        val out = IntArray(48)
+        for (gy in 0 until 4) for (gx in 0 until 4) {
+            val xa = (cx - hw + 2 * hw * gx / 4f).toInt().coerceIn(0, b.width - 1)
+            val xb = (cx - hw + 2 * hw * (gx + 1) / 4f).toInt().coerceIn(xa, b.width - 1)
+            val ya = (cy - hh + 2 * hh * gy / 4f).toInt().coerceIn(0, b.height - 1)
+            val yb = (cy - hh + 2 * hh * (gy + 1) / 4f).toInt().coerceIn(ya, b.height - 1)
+            var r = 0L; var g = 0L; var bl = 0L; var n = 0L
+            var yy = ya
+            while (yy <= yb) {
+                var xx = xa
+                while (xx <= xb) {
+                    val c = b.getPixel(xx, yy)
+                    r += Color.red(c); g += Color.green(c); bl += Color.blue(c); n++
+                    xx++
+                }
+                yy++
+            }
+            val i = (gy * 4 + gx) * 3
+            if (n > 0) { out[i] = (r / n).toInt(); out[i + 1] = (g / n).toInt(); out[i + 2] = (bl / n).toInt() }
+        }
+        return out
+    }
+
+    private fun popupDiff(a: IntArray, c: IntArray): Int {
+        var d = 0
+        for (i in 0 until 48) d += Math.abs(a[i] - c[i])
+        return d / 48
+    }
+
+    /** Kayıtlı pencerelerden biri ekrandaysa (üst üste 2 taramada) kapatma noktasına dokunur. force: test, bekleme yok, hemen dokunur. */
+    private fun popupScan(b: Bitmap, force: Boolean): Int {
+        val now = System.currentTimeMillis()
+        if (!force && (now - popupLastScan < cfgI("popupSec", 5) * 1000L || now < popupCool)) return 0
+        popupLastScan = now
+        val list = popupList()
+        var closed = 0
+        for ((i, pp) in list.withIndex()) {
+            val d = popupDiff(pp.sig, popupSig(b, pp.x, pp.y))
+            if (d <= 22) {
+                val n = (popupStreak[i] ?: 0) + 1
+                popupStreak[i] = n
+                if (force || n >= 2) {
+                    popupStreak[i] = 0
+                    popupCool = System.currentTimeMillis() + 3000L
+                    tapPx(pp.x * b.width, pp.y * b.height)
+                    ev("Pencere kapatıldı (#" + (i + 1) + ")", true, 3)
+                    closed++
+                    Thread.sleep(600)
+                    break
+                }
+            } else popupStreak[i] = 0
+        }
+        return closed
+    }
+
+    private fun popupTest() {
+        val list = popupList()
+        if (list.isEmpty()) {
+            say("Kayıtlı pencere yok. Önce 'Pencere ekle'.")
+            return
+        }
+        val b = shot() ?: return
+        val sb = StringBuilder()
+        for ((i, pp) in list.withIndex()) sb.append("#" + (i + 1) + " fark " + popupDiff(pp.sig, popupSig(b, pp.x, pp.y)) + " (eşik 22)\n")
+        val n = popupScan(b, true)
+        say(sb.toString() + (if (n > 0) "Pencere bulundu ve kapatıldı" else "Eşleşen pencere yok"))
+    }
+
+    private var popupOverlay: View? = null
+
+    private fun popupMark() {
+        if (autoRunning || busy) {
+            say("Otomasyon açıkken eklenemez. Önce durdur.")
+            return
+        }
+        if (popupOverlay != null) return
+        refreshScreen()
+        panelOpen = false
+        updateUi()
+        val v = View(this)
+        v.setBackgroundColor(0x14FFAA00)
+        val info = TextView(this)
+        info.setTextColor(Color.WHITE)
+        info.textSize = 14f
+        info.text = "Açık pencerenin kapatma (X) noktasına dokun"
+        info.setPadding(dp(14), dp(8), dp(14), dp(8))
+        info.background = rounded(0xEE161920.toInt(), 12)
+        val ilp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        ilp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        ilp.y = dp(8)
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT
+        )
+        v.setOnTouchListener { _, ev ->
+            if (ev.actionMasked == MotionEvent.ACTION_UP) {
+                val x = ev.rawX
+                val y = ev.rawY
+                try {
+                    wm.removeView(v)
+                    wm.removeView(info)
+                } catch (e: Exception) {
+                }
+                popupOverlay = null
+                Thread {
+                    Thread.sleep(400)
+                    val b = grab()
+                    if (b == null) {
+                        toast("Ekran alınamadı")
+                    } else {
+                        val fx = x / screenW
+                        val fy = y / screenH
+                        val sig = popupSig(b, fx, fy)
+                        val e = StringBuilder()
+                        e.append(fx).append(",").append(fy)
+                        for (n in sig) e.append(",").append(n)
+                        val old = prefs().getString("popups", "") ?: ""
+                        prefs().edit().putString("popups", if (old.isEmpty()) e.toString() else old + ";" + e).apply()
+                        toast("Pencere kaydedildi (" + popupList().size + ")")
+                        tapPx(x, y)
+                    }
+                    ui {
+                        panelOpen = true
+                        updateUi()
+                    }
+                }.start()
+            }
+            true
+        }
+        popupOverlay = v
+        ui {
+            wm.addView(v, lp)
+            wm.addView(info, ilp)
+        }
     }
 
     private fun brownFrac(b: Bitmap, x0: Float, x1: Float, y0: Float, y1: Float): Float {
@@ -2915,7 +3086,7 @@ class TimerService : AccessibilityService() {
         // KONTROL MERKEZİ: satır satır. Sağdaki anahtar aç/kapatır, soldaki isme basınca o seçeneğin ayarları açılır/kapanır.
         val icons = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target", "popupOn" to "popup"
         )
         val cc = TextView(this)
         cc.text = "KONTROL MERKEZİ"
@@ -3005,6 +3176,13 @@ class TimerService : AccessibilityService() {
                 "ownerOn" -> {
                     hint("Bossa saldırırken üstteki satırda senin adından başka bir oyuncu adı görünürse boss bırakılır, sıradakine geçilir. Adın: " + (prefs().getString("cfg_myName", "yxesky") ?: "yxesky") + " (uygulamadaki ayar ekranından değişir). Okuma yerini Ayar > Okuma bölgeleri'nde ownTL/ownBR ile işaretle.")
                     buttons(listOf<Pair<String, () -> Unit>>("Ayar (işaretle)" to { toggleMenu() }, "Oku (test)" to { runManual { ownerTest() } }))
+                }
+                "popupOn" -> {
+                    hint("Etkinlik/reklam gibi pencereler ekranı kapatırsa bot takılır. Pencere açıkken 'Pencere ekle'ye bas, sonra kapatma (X) noktasına dokun: bot o noktanın rengini ve çevresini öğrenir, aynısını görünce kapatır. Her pencere için bir kez yap.")
+                    hint("Kayıtlı pencere: " + popupList().size)
+                    buttons(listOf<Pair<String, () -> Unit>>("Pencere ekle" to { popupMark() }, "Hepsini sil" to { prefs().edit().remove("popups").apply(); say("Pencere kayıtları silindi") }))
+                    step("Tarama aralığı (sn)", "popupSec", 5, 2, 60) { 1 }
+                    buttons(listOf<Pair<String, () -> Unit>>("Şimdi tara (test)" to { runManual { popupTest() } }))
                 }
                 "macroTpOn" -> hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. Kayıtlar Bakım sekmesinde.")
                 "angelOn" -> {
@@ -4898,7 +5076,6 @@ class TimerService : AccessibilityService() {
                 return true
             }
             val b = shot() ?: continue
-            if (fightBuff(b)) return true
             val oth = ownerTakenCheck(b)
             if (oth != null) {
                 setAuto(false)
@@ -6678,7 +6855,7 @@ class TimerService : AccessibilityService() {
         l.add(ScItem("sw", "Kronometre", "stopwatch") { toggleStopwatch() })
         val ic = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target", "popupOn" to "popup"
         )
         for (t in TOGGLES) l.add(ScItem("t:" + t.first, t.second, ic[t.first] ?: "dice") {
             prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
@@ -7356,6 +7533,11 @@ class IconView(context: android.content.Context, private val kind: String, priva
                 c.drawCircle(12f, 12f, 1.6f, fill)
                 p.moveTo(12f, 1.5f); p.lineTo(12f, 6f); p.moveTo(12f, 18f); p.lineTo(12f, 22.5f)
                 p.moveTo(1.5f, 12f); p.lineTo(6f, 12f); p.moveTo(18f, 12f); p.lineTo(22.5f, 12f)
+                c.drawPath(p, line)
+            }
+            "popup" -> {
+                c.drawRoundRect(android.graphics.RectF(3.5f, 4.5f, 20.5f, 19.5f), 2.2f, 2.2f, line)
+                p.moveTo(9f, 9.5f); p.lineTo(15f, 15.5f); p.moveTo(15f, 9.5f); p.lineTo(9f, 15.5f)
                 c.drawPath(p, line)
             }
             "gear" -> {
