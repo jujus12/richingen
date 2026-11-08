@@ -22,9 +22,10 @@ import android.widget.Toast
 /** Ayar ekranı: sayısal değerler, açık/kapalı seçenekler ve harita listesi burada girilir. */
 class MainActivity : Activity() {
 
-    private class Field(val key: String, val label: String, val hint: String, val def: String, val decimal: Boolean = false)
+    private class Field(val key: String, val label: String, val hint: String, val def: String, val decimal: Boolean = false, val text: Boolean = false)
 
     private val autoFields = listOf(
+        Field("myName", "Karakter adın", "Sahip kontrolü açıkken boss çubuğundaki ad bu değilse (başkası saldırıyorsa) boss bırakılır", "yxesky", false, true),
         Field("leadSec", "Bossa gitme payı", "Süresi bu kadar saniye kalınca (ya da geçmişse) bossa gidilir", "20"),
         Field("fightTimeout", "Savaş zaman aşımı", "Bir boss için en fazla bekleme (sn)", "300"),
         Field("deathLimit", "Ölüm sınırı", "Aynı bossta bu kadar ölünce o boss atlanıp farma dönülür", "3"),
@@ -476,7 +477,9 @@ class MainActivity : Activity() {
         row.addView(left, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         val et = EditText(this)
-        et.inputType = if (f.decimal) {
+        et.inputType = if (f.text) {
+            InputType.TYPE_CLASS_TEXT
+        } else if (f.decimal) {
             InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         } else {
             InputType.TYPE_CLASS_NUMBER

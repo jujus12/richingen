@@ -114,13 +114,13 @@ class TimerService : AccessibilityService() {
 
         /** Ayar menüsündeki gruplar. "Işınlanma bağlantıları" grubu haritalara göre ayrıca eklenir. */
         val GROUPS = listOf(
-            "1 · Okuma bölgeleri (Test ile kontrol et)" to listOf("nameTL", "nameBR", "cntTL", "cntBR", "miniTL", "miniBR"),
+            "1 · Okuma bölgeleri (Test ile kontrol et)" to listOf("nameTL", "nameBR", "cntTL", "cntBR", "miniTL", "miniBR", "ownTL", "ownBR"),
             "2 · Harita" to listOf("minimap", "closeMap", "random"),
             "3 · Chat" to listOf("chat", "pmTab", "closeChat"),
             "5 · Wire (sadece Raklion'lar)" to listOf("switchBtn", "wire1", "wire2", "wire3", "switchOk"),
             "6 · Farm ve savaş düğmeleri" to listOf("autoAtk", "shield", "imp", "angel", "revive", "goldLink", "redLink"),
             "7 · Envanter, pot, Recycle" to listOf(
-                "inventory", "shopTab", "purchaseHP", "purchaseMP", "hpCount", "mpCount",
+                "inventory", "shopTab", "purchaseHP", "purchaseMP", "hpCount", "mpCount", "rndCount",
                 "recycleTab", "recycleBtn", "closeRight", "closeLeft"
             )
         )
@@ -132,6 +132,8 @@ class TimerService : AccessibilityService() {
             "cntBR" to "Mezar sayacının arandığı alanın SAĞ ALTI",
             "miniTL" to "Mini haritanın SOL ÜST köşesi (boss ikonu burada aranır)",
             "miniBR" to "Mini haritanın SAĞ ALT köşesi",
+            "ownTL" to "Bossa saldırırken üstte çıkan satırın ('Lv250 ... yxesky') SOL ÜSTÜ (sahip kontrolü için)",
+            "ownBR" to "Aynı satırın SAĞ ALTI (oyuncu adı dahil)",
             "minimap" to "Sağ üstteki mini harita (haritayı açar)",
             "closeMap" to "Harita ekranının X (kapat) düğmesi (harita açıkken işaretle)",
             "random" to "Haritadaki Random düğmesi (harita açıkken işaretle)",
@@ -158,6 +160,7 @@ class TimerService : AccessibilityService() {
             "purchaseMP" to "Shop'ta 99'luk MP pot Purchase düğmesi",
             "hpCount" to "Alt çubukta HP pot SAYISININ yeri (örn. 452)",
             "mpCount" to "Alt çubukta MP pot SAYISININ yeri (örn. 1425)",
+            "rndCount" to "Alt çubukta Random (göz simgeli) eşyanın SAYISININ yeri (örn. 286)",
             "recycleTab" to "Envanterde alttaki Recycle sekmesi (Inventory açıkken)",
             "recycleBtn" to "Recycle ekranındaki mavi Recycle düğmesi",
             "closeRight" to "Pencerelerin sağ üst X düğmesi (Inventory/Shop/Recycle)",
@@ -209,7 +212,8 @@ class TimerService : AccessibilityService() {
             Triple("routeOn", "Rota", false),
             Triple("idleFarmOn", "Boşta farm", false),
             Triple("macroTpOn", "Kayıtlı ışın", false),
-            Triple("protoOn", "Golden protokolü", true)
+            Triple("protoOn", "Golden protokolü", true),
+            Triple("ownerOn", "Sahip kontrolü", false)
         )
 
         /** Kayıtlı tema numarası; Gotik temaya bir kez otomatik geçilir. */
@@ -1814,8 +1818,24 @@ class TimerService : AccessibilityService() {
         say("Pot: HP " + (hp ?: "?") + "  MP " + (mp ?: "?") + "  (eşik " + min + ")")
         val lowHp = hp != null && hp < min
         val lowMp = mp != null && mp < min
-        if (!lowHp && !lowMp) return
-        buyPots(lowHp, lowMp)
+        val rmin = cfgI("rndMin", 0)
+        var lowRnd = false
+        if (rmin > 0 && hasPt("rndCount")) {
+            val rc = readCount(b, "rndCount")
+            ev("Random sayısı: " + (rc ?: "?") + " (eşik " + rmin + ")")
+            lowRnd = rc != null && rc < rmin
+        }
+        if (!lowHp && !lowMp && !lowRnd) return
+        if (lowHp || lowMp) buyPots(lowHp, lowMp)
+        if (lowRnd) {
+            if (macroHas("rndbuy")) {
+                say("Random azaldı, kayıtlı işlem oynatılıyor")
+                playMacro("rndbuy")
+                ev("Random alındı (kayıtlı işlem)", true, 2)
+            } else {
+                ev("Random azaldı ama 'Random al' kaydı yok (Bakım > Kayıtlı işlemler)", true, 3)
+            }
+        }
     }
 
     /** Inventory > Shop > iki Purchase düğmesine 3'er kez (toplam 6) > Inventory'yi kapat. Her adım arası 1 sn. */
@@ -2405,7 +2425,8 @@ class TimerService : AccessibilityService() {
             buffCheck()
         } else {
             ev("Boss başarısız: " + shortTitle(e))
-            blocked[e.id] = System.currentTimeMillis() + 90000L
+            blocked[e.id] = System.currentTimeMillis() + (if (ownerSkipped) 300000L else 90000L)
+            ownerSkipped = false
         }
     }
 
@@ -2442,6 +2463,14 @@ class TimerService : AccessibilityService() {
                 tapPoint("closeMap")
                 pause(600)
                 continue
+            }
+            val oth = ownerTakenCheck(b)
+            if (oth != null) {
+                setAuto(false)
+                ev("Boss başka oyuncuda (" + oth + "), sıradakine geçiliyor: " + shortTitle(e), true, 3)
+                say("Boss başka oyuncuda: " + oth)
+                ownerSkipped = true
+                return false
             }
             if (miniAlive(b)) {
                 seen = true
@@ -2516,6 +2545,7 @@ class TimerService : AccessibilityService() {
                 "\nMini harita boss: " + String.format("%.4f", mf) + (if (miniAlive(b)) " CANLI" else " yok") + " (eşik 0.0040)" +
                 "\nATK/DEF: " + (if (st != null) st.first.toString() + "/" + st.second else "okunamadı") +
                 "\nPot HP/MP: " + (readCount(b, "hpCount") ?: "?") + "/" + (readCount(b, "mpCount") ?: "?") +
+                (if (hasPt("rndCount")) "\nRandom sayısı: " + (readCount(b, "rndCount") ?: "?") else "") +
                 "\nHarita açık: " + open + (if (open) "  imleç: " + (me != null) else "")
         )
         ui { showRects(me) }
@@ -2839,7 +2869,7 @@ class TimerService : AccessibilityService() {
         // KONTROL MERKEZİ: satır satır. Sağdaki anahtar aç/kapatır, soldaki isme basınca o seçeneğin ayarları açılır/kapanır.
         val icons = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target"
         )
         val cc = TextView(this)
         cc.text = "KONTROL MERKEZİ"
@@ -2862,6 +2892,8 @@ class TimerService : AccessibilityService() {
                 "potOn" -> {
                     step("Pot eşiği", "potMin", 20, 0, 999) { 5 }
                     step("Pot okuma (sn)", "potWatchSec", 60, 10, 600) { 10 }
+                    step("Random eşiği (0=kapalı)", "rndMin", 0, 0, 999) { 5 }
+                    hint("Random sayısının yeri Ayar > Envanter grubunda, alma işlemi Bakım > Kayıtlı işlemler > Random al ile kaydedilir.")
                 }
                 "recycleOn" -> {
                     step("Her kaç kesimde Recycle (0=kapalı)", "recycleKillEvery", 0, 0, 50) { 1 }
@@ -2923,6 +2955,10 @@ class TimerService : AccessibilityService() {
                     step("Tekrar bekleme (dk)", "protoCooldownMin", 15, 1, 120) { 5 }
                     buttons(listOf<Pair<String, () -> Unit>>("Uyarıyla test" to { protoTest(true) }, "Hemen başlat" to { protoTest(false) }))
                     hint("Test gerçekten çalışır: ayarları değiştirir ve otomasyonu başlatır (otomasyon kapalıyken).")
+                }
+                "ownerOn" -> {
+                    hint("Bossa saldırırken üstteki satırda senin adından başka bir oyuncu adı görünürse boss bırakılır, sıradakine geçilir. Adın: " + (prefs().getString("cfg_myName", "yxesky") ?: "yxesky") + " (uygulamadaki ayar ekranından değişir). Okuma yerini Ayar > Okuma bölgeleri'nde ownTL/ownBR ile işaretle.")
+                    buttons(listOf<Pair<String, () -> Unit>>("Ayar (işaretle)" to { toggleMenu() }, "Oku (test)" to { runManual { ownerTest() } }))
                 }
                 "macroTpOn" -> hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. Kayıtlar Bakım sekmesinde.")
                 else -> hint("Bu seçeneğin ek ayarı yok.")
@@ -3401,6 +3437,7 @@ class TimerService : AccessibilityService() {
         val boxPot = sect(tabMaint, "POT VE RECYCLE")
         stepRow("Pot eşiği", "potMin", 20, 0, 999, boxPot) { 5 }
         stepRow("Pot okuma (sn)", "potWatchSec", 60, 10, 600, boxPot) { 10 }
+        stepRow("Random eşiği (0=kapalı)", "rndMin", 0, 0, 999, boxPot) { 5 }
         stepRow("Her kaç kesimde Recycle (0=kapalı)", "recycleKillEvery", 0, 0, 50, boxPot) { 1 }
         stepRow("Recycle aralığı (dk)", "recycleEvery", 20, 1, 240, boxPot) { 5 }
         val boxIdle = sect(tabMaint, "BOŞTA FARM")
@@ -4307,6 +4344,14 @@ class TimerService : AccessibilityService() {
             }
             val b = shot() ?: continue
             if (fightBuff(b)) return true
+            val oth = ownerTakenCheck(b)
+            if (oth != null) {
+                setAuto(false)
+                ev("Boss başka oyuncuda (" + oth + "), sıradakine geçiliyor", true, 3)
+                say("Boss başka oyuncuda: " + oth)
+                goldSkip.add(Pair(tgt, System.currentTimeMillis() + 180000L))
+                return true
+            }
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -4801,6 +4846,14 @@ class TimerService : AccessibilityService() {
             }
             val b = shot() ?: continue
             if (fightBuff(b)) return true
+            val oth = ownerTakenCheck(b)
+            if (oth != null) {
+                setAuto(false)
+                ev("Boss başka oyuncuda (" + oth + "), sıradakine geçiliyor", true, 3)
+                say("Boss başka oyuncuda: " + oth)
+                redSkip.add(Pair(tgt, System.currentTimeMillis() + 180000L))
+                return true
+            }
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -5256,6 +5309,14 @@ class TimerService : AccessibilityService() {
             }
             val b = shot() ?: continue
             if (fightBuff(b)) return true
+            val oth = ownerTakenCheck(b)
+            if (oth != null) {
+                setAuto(false)
+                ev("Boss başka oyuncuda (" + oth + "), sıradakine geçiliyor", true, 3)
+                say("Boss başka oyuncuda: " + oth)
+                routeSkip.add(Pair(tgt, System.currentTimeMillis() + 180000L))
+                return true
+            }
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -5436,7 +5497,7 @@ class TimerService : AccessibilityService() {
 
     private class Gest(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val dur: Long, val gap: Long)
 
-    private val macroNames = listOf(Pair("recycle", "Recycle"), Pair("pothp", "HP pot al"), Pair("potmp", "MP pot al"))
+    private val macroNames = listOf(Pair("recycle", "Recycle"), Pair("pothp", "HP pot al"), Pair("potmp", "MP pot al"), Pair("rndbuy", "Random al"))
     private val macroLabels = HashMap<String, TextView>()
     private val macroBase = HashMap<String, String>()
     private var recOverlay: View? = null
@@ -5817,6 +5878,13 @@ class TimerService : AccessibilityService() {
             }
             val b = shot() ?: continue
             if (fightBuff(b)) return true
+            val oth = ownerTakenCheck(b)
+            if (oth != null) {
+                setAuto(false)
+                ev("Boss başka oyuncuda (" + oth + "), sıradakine geçiliyor", true, 3)
+                say("Boss başka oyuncuda: " + oth)
+                return false
+            }
             if (orangeAt(b, "closeMap")) {
                 tapPoint("closeMap")
                 pause(600)
@@ -6244,6 +6312,55 @@ class TimerService : AccessibilityService() {
         main.postDelayed(swTick, 100)
     }
 
+    // ------------------------------------------------------------------ sahip kontrolü: boss çubuğunda başka oyuncunun adı
+
+    @Volatile private var ownerLastChk = 0L
+    @Volatile private var ownerStrikes = 0
+    @Volatile private var ownerSkipped = false
+
+    /** Boss çubuğu satırında kendi adın dışında bir oyuncu adı varsa onu döndürür, yoksa null. */
+    private fun ownerOtherName(b: Bitmap): String? {
+        val raw = ocrRegion(b, "ownTL", "ownBR") ?: return null
+        val t = raw.replace("\n", " ").trim()
+        val mine = (prefs().getString("cfg_myName", "yxesky") ?: "yxesky").trim().lowercase()
+        if (mine.isEmpty() || t.isEmpty()) return null
+        if (t.lowercase().contains(mine)) return null
+        val q = maxOf(t.lastIndexOf('\''), t.lastIndexOf('\u2019'), t.lastIndexOf('"'))
+        if (q < 0 || q >= t.length - 1) return null
+        val tail = t.substring(q + 1).trim()
+        val letters = tail.filter { it.isLetterOrDigit() }
+        if (letters.length < 3) return null
+        if (lev(letters.lowercase(), mine) <= 2) return null
+        return tail
+    }
+
+    /** Savaş döngüsünde 2 sn'de bir bakar; üst üste 2 okumada başka ad görürse o adı döndürür. */
+    private fun ownerTakenCheck(b: Bitmap): String? {
+        if (!on("ownerOn") || !hasPt("ownTL") || !hasPt("ownBR")) return null
+        val now = System.currentTimeMillis()
+        if (now - ownerLastChk < 2000L) return null
+        ownerLastChk = now
+        val oth = ownerOtherName(b)
+        if (oth == null) {
+            ownerStrikes = 0
+            return null
+        }
+        ownerStrikes++
+        if (ownerStrikes < 2) return null
+        ownerStrikes = 0
+        return oth
+    }
+
+    private fun ownerTest() {
+        if (!hasPt("ownTL") || !hasPt("ownBR")) {
+            say("Önce Ayar > Okuma bölgeleri'nde ownTL ve ownBR'yi işaretle")
+            return
+        }
+        val b = shot() ?: fail("Ekran görüntüsü alınamadı")
+        val oth = ownerOtherName(b)
+        say("Okunan: '" + lastOcr + "'\n" + (if (oth == null) "Başka oyuncu yok (ya da okunamadı)" else "Başka oyuncu: " + oth))
+    }
+
     // ------------------------------------------------------------------ hata sonrası Golden protokolü
 
     private var protoWin: View? = null
@@ -6497,7 +6614,7 @@ class TimerService : AccessibilityService() {
         l.add(ScItem("sw", "Kronometre", "stopwatch") { toggleStopwatch() })
         val ic = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target"
         )
         for (t in TOGGLES) l.add(ScItem("t:" + t.first, t.second, ic[t.first] ?: "dice") {
             prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
