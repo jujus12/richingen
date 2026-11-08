@@ -238,7 +238,7 @@ class TimerService : AccessibilityService() {
         val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds", "hidden", "ignorepts", "buffStep")
 
         private val PROFILE_SKIP = setOf(
-            "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
+            "tabs5", "tabs6", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
             "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
         )
 
@@ -2986,6 +2986,7 @@ class TimerService : AccessibilityService() {
     private val stepViews = HashMap<String, Pair<TextView, Int>>()
 
     private fun updateProfileBtn() {
+        plansBox?.let { pb -> ui { buildPlans(pb) } }
         val names = profileNames(prefs())
         val a = prefs().getString("profile_active", "") ?: ""
         profileBtn?.text = if (names.isEmpty()) "Profil yok (ayar ekranından kaydet)" else "Profil: " + (if (a.isEmpty()) "-" else a) + "  ▸  (uzun bas: güncelle)"
@@ -3051,9 +3052,65 @@ class TimerService : AccessibilityService() {
     private var homeBox: LinearLayout? = null
     private var homeOpen = ""
 
+    private var plansBox: LinearLayout? = null
+
     private fun refreshHome() {
         val hb = homeBox ?: return
-        ui { buildHome(hb) }
+        ui {
+            buildHome(hb)
+            plansBox?.let { buildPlans(it) }
+        }
+    }
+
+    /** PLANLAR sekmesi: kayıtlı planlar; her biri için tek tuşla başlat, yükle, güncelle. */
+    private fun buildPlans(box: LinearLayout) {
+        box.removeAllViews()
+        val full = LinearLayout.LayoutParams.MATCH_PARENT
+        val wrap = LinearLayout.LayoutParams.WRAP_CONTENT
+        val names = profileNames(prefs())
+        val active = prefs().getString("profile_active", "") ?: ""
+        val head = TextView(this)
+        head.text = "PLANLAR"
+        head.textSize = 11f
+        head.setTextColor(ACCENT)
+        head.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        box.addView(head)
+        val hint = TextView(this)
+        hint.textSize = 11f
+        hint.setTextColor(TEXT_DIM)
+        hint.text = if (names.isEmpty()) "Plan yok. Uygulamadaki ayar ekranından bir adla kaydet." else "Plan tüm ayarları içerir. ntfy: plan <ad>. ● aktif plan."
+        box.addView(hint)
+        for (n in names) {
+            val sel = n == active
+            val cd = LinearLayout(this)
+            cd.orientation = LinearLayout.VERTICAL
+            cd.background = card(CARD_BG, 14, if (sel) ACCENT else 0xFF332D40.toInt())
+            cd.setPadding(dp(12), dp(8), dp(12), dp(10))
+            val t = TextView(this)
+            t.text = (if (sel) "● " else "○ ") + n
+            t.textSize = 15f
+            t.tag = "serif"
+            t.typeface = android.graphics.Typeface.SERIF
+            t.setTextColor(if (sel) ACCENT else Color.WHITE)
+            cd.addView(t)
+            val r = LinearLayout(this)
+            r.orientation = LinearLayout.HORIZONTAL
+            val go = mkBtn("▶ Başlat", OK, 0xFF04200F.toInt()) { startPlan(n) }
+            r.addView(go, LinearLayout.LayoutParams(0, dp(38), 1.3f))
+            val ld = mkBtn("Yükle") {
+                if (autoRunning || busy) say("Otomasyon açık. Önce durdur.") else loadProfile(n)
+            }
+            r.addView(ld, LinearLayout.LayoutParams(0, dp(38), 1f).also { it.leftMargin = dp(6) })
+            val up = mkBtn("Güncelle") {
+                if (n == active) {
+                    saveProfile(prefs(), n)
+                    toast("Plan güncellendi: " + n)
+                } else toast("Önce planı yükle, sonra güncelle")
+            }
+            r.addView(up, LinearLayout.LayoutParams(0, dp(38), 1f).also { it.leftMargin = dp(6) })
+            cd.addView(r, LinearLayout.LayoutParams(full, wrap).also { it.topMargin = dp(8) })
+            box.addView(cd, LinearLayout.LayoutParams(full, wrap).also { it.topMargin = dp(8) })
+        }
     }
 
     private fun buildHome(box: LinearLayout) {
@@ -3110,41 +3167,6 @@ class TimerService : AccessibilityService() {
 
         val names = profileNames(prefs())
         val active = prefs().getString("profile_active", "") ?: ""
-        // PROFİLLER (en üstte)
-        val chipHead = TextView(this)
-        chipHead.text = "PROFİL"
-        chipHead.textSize = 11f
-        chipHead.setTextColor(ACCENT)
-        chipHead.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        box.addView(chipHead)
-        if (names.isEmpty()) {
-            val t = TextView(this)
-            t.text = "Profil yok. Uygulamadaki ayar ekranından kaydet."
-            t.textSize = 11f
-            t.setTextColor(TEXT_DIM)
-            box.addView(t)
-        } else {
-            val hs = HorizontalScrollView(this)
-            hs.isHorizontalScrollBarEnabled = false
-            val row = LinearLayout(this)
-            row.orientation = LinearLayout.HORIZONTAL
-            for (n in names) {
-                val sel = n == active
-                val c = mkBtn(n, if (sel) onFill() else CARD_BG, Color.WHITE) { loadProfile(n) }
-                if (sel) c.background = card(onFill(), 10, ACCENT)
-                c.textSize = 12f
-                val cl = LinearLayout.LayoutParams(wrap, dp(34))
-                cl.rightMargin = dp(6)
-                row.addView(c, cl)
-            }
-            hs.addView(row)
-            box.addView(hs, lpTop(dp(38)))
-            if (active.isNotEmpty()) {
-                val go = mkBtn("▶  " + active + " planını başlat", OK, 0xFF04200F.toInt()) { startPlan(active) }
-                box.addView(go, lpTop(dp(40)))
-            }
-        }
-
         // KONTROL MERKEZİ: satır satır. Sağdaki anahtar aç/kapatır, soldaki isme basınca o seçeneğin ayarları açılır/kapanır.
         val icons = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
@@ -3918,7 +3940,12 @@ class TimerService : AccessibilityService() {
         homeBox = tabHome
         val homeScroll = ScrollView(this)
         homeScroll.addView(tabHome)
-        val tabNames = listOf("Merkez", "Boss", "İşaret", "Bakım", "Araç")
+        val tabPlans = LinearLayout(this)
+        tabPlans.orientation = LinearLayout.VERTICAL
+        plansBox = tabPlans
+        val plansScroll = ScrollView(this)
+        plansScroll.addView(tabPlans)
+        val tabNames = listOf("Merkez", "Planlar", "Boss", "İşaret", "Bakım", "Araç")
         fun scrolled(v: LinearLayout): ScrollView {
             val sv = ScrollView(this)
             sv.addView(v)
@@ -3927,7 +3954,7 @@ class TimerService : AccessibilityService() {
         val markScroll = scrolled(tabMark)
         val maintScroll = scrolled(tabMaint)
         val toolsScroll = scrolled(tabTools)
-        val tabViews = listOf<View>(homeScroll, tabBoss, markScroll, maintScroll, toolsScroll)
+        val tabViews = listOf<View>(homeScroll, plansScroll, tabBoss, markScroll, maintScroll, toolsScroll)
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
         tabBar.orientation = LinearLayout.HORIZONTAL
@@ -3954,14 +3981,16 @@ class TimerService : AccessibilityService() {
         tbl.topMargin = dp(6)
         outer.addView(tabBar, tbl)
         outer.addView(homeScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
+        outer.addView(plansScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
         outer.addView(tabBoss)
         val tabH = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt())
         outer.addView(markScroll, tabH)
         outer.addView(maintScroll, LinearLayout.LayoutParams(tabH))
         outer.addView(toolsScroll, LinearLayout.LayoutParams(tabH))
         buildHome(tabHome)
-        if (!prefs().getBoolean("tabs5", false)) prefs().edit().putInt("tab", 0).putBoolean("tabs5", true).apply()
-        showTab(prefs().getInt("tab", 0).coerceIn(0, 4))
+        buildPlans(tabPlans)
+        if (!prefs().getBoolean("tabs6", false)) prefs().edit().putInt("tab", 0).putBoolean("tabs6", true).apply()
+        showTab(prefs().getInt("tab", 0).coerceIn(0, 5))
         outer.addView(mainRow, mainRowLp)
         outer.alpha = uiAlpha() / 100f
         updateSizeBtns()
