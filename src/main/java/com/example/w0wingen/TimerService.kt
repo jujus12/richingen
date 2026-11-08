@@ -235,7 +235,7 @@ class TimerService : AccessibilityService() {
         )
 
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
-        val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds")
+        val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds", "hidden", "ignorepts", "buffStep")
 
         private fun profKey(k: String) = k.startsWith("cfg_") && k != "cfg_ntfy" && k != "cfg_maps"
 
@@ -2354,6 +2354,9 @@ class TimerService : AccessibilityService() {
     }
 
     @Volatile private var lastKillAt = 0L
+    @Volatile private var protoKillAt = 0L
+    @Volatile private var protoKillTotal = 0
+    @Volatile private var protoIdleMode = false
     @Volatile private var lastKillTotal = 0
     @Volatile private var idleFarmUntil = 0L
 
@@ -2372,9 +2375,28 @@ class TimerService : AccessibilityService() {
         ev("Otomasyon başladı", true, 3)
         buffCheck()
         potCheckNow()
+        protoKillAt = System.currentTimeMillis()
+        protoKillTotal = kills + goldKills + redKills + routeKills
         while (autoRunning && !cancel) {
             try {
                 val now = System.currentTimeMillis()
+                // Golden protokolü bekçisi: belirli süre hiçbir şey kesilmezse uyarı verir, reddedilmezse protokol uygulanır
+                run {
+                    val tot = kills + goldKills + redKills + routeKills
+                    if (tot != protoKillTotal) {
+                        protoKillTotal = tot
+                        protoKillAt = now
+                    }
+                    val lim = cfgI("protoIdleMin", 20)
+                    if (lim > 0 && on("protoOn") && protoWin == null && now - protoKillAt >= lim * 60000L) {
+                        protoKillAt = now
+                        if (now - lastProtoAt >= cfgI("protoCooldownMin", 15) * 60000L) {
+                            ev(lim.toString() + " dk hiçbir şey kesilmedi, Golden protokolü uyarısı", true, 5)
+                            protoIdleMode = true
+                            ui { showProtoWarning(lim.toString() + " dk hiçbir şey kesilmedi", false) }
+                        }
+                    }
+                }
                 val due = nextDue()
                 val recEvery = cfgI("recycleEvery", 20) * 60000L
                 val recDue = on("recycleOn") && now - lastRecycle >= recEvery
@@ -3170,6 +3192,7 @@ class TimerService : AccessibilityService() {
                     buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
                     step("Uyarı süresi (sn)", "protoSec", 10, 3, 60) { 1 }
                     step("Tekrar bekleme (dk)", "protoCooldownMin", 15, 1, 120) { 5 }
+                    step("Kesim yoksa devreye gir (dk, 0=kapalı)", "protoIdleMin", 20, 0, 240) { 5 }
                     buttons(listOf<Pair<String, () -> Unit>>("Uyarıyla test" to { protoTest(true) }, "Hemen başlat" to { protoTest(false) }))
                     hint("Test gerçekten çalışır: ayarları değiştirir ve otomasyonu başlatır (otomasyon kapalıyken).")
                 }
@@ -6662,11 +6685,12 @@ class TimerService : AccessibilityService() {
         outer.addView(msg)
         var left = cfgI("protoSec", 10).coerceIn(3, 60)
         fun label() {
-            msg.text = (if (test) "TEST: " else "Otomasyon hata verip durdu:") + "\n" + reason + "\n\n" + left + " sn içinde Golden protokolü uygulanacak"
+            msg.text = (if (test) "TEST: " else if (protoIdleMode) "Otomasyon bir süredir bir şey kesmedi:" else "Otomasyon hata verip durdu:") + "\n" + reason + "\n\n" + left + " sn içinde Golden protokolü uygulanacak"
         }
         label()
         outer.addView(mkBtn("Reddet") {
             closeProto()
+            protoIdleMode = false
             ev("Golden protokolü reddedildi", true, 3)
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(42)))
         val w = minOf(dp(300), (screenW * 0.85f).toInt())
@@ -6681,7 +6705,9 @@ class TimerService : AccessibilityService() {
                 left--
                 if (left <= 0) {
                     closeProto()
-                    runGoldenProtocol(test)
+                    val idle = protoIdleMode
+                    protoIdleMode = false
+                    Thread { runGoldenProtocol(test, idle) }.start()
                 } else {
                     label()
                     main.postDelayed(this, 1000)
@@ -6703,7 +6729,16 @@ class TimerService : AccessibilityService() {
         if (withWarning) ui { showProtoWarning("test", true) } else runGoldenProtocol(true)
     }
 
-    private fun runGoldenProtocol(test: Boolean = false) {
+    private fun runGoldenProtocol(test: Boolean = false, restart: Boolean = false) {
+        if ((autoRunning || busy) && restart) {
+            ev("Golden protokolü: çalışan otomasyon durduruluyor", true, 3)
+            stopJob()
+            var w = 0
+            while ((autoRunning || busy) && w < 100) {
+                Thread.sleep(100)
+                w++
+            }
+        }
         if (autoRunning || busy) {
             ev("Golden protokolü: otomasyon zaten çalışıyor", true, 3)
             return
@@ -7084,12 +7119,20 @@ class TimerService : AccessibilityService() {
                 push(if (l.isEmpty()) "Günlük boş" else l.joinToString("\n"), 3)
             }
             "ekran", "screen" -> Thread { sendScreen(tp) }.start()
-            "profiller", "profiles" -> {
+            "planlar", "plans", "profiller", "profiles" -> {
                 val a = prefs().getString("profile_active", "") ?: ""
                 val n = profileNames(prefs())
                 push(if (n.isEmpty()) "Kayıtlı profil yok" else n.joinToString("\n") { (if (it == a) "● " else "○ ") + it }, 3)
             }
-            "profil", "profile" -> {
+            "plan", "profil", "profile" -> {
+                if (first == "plan" && arg.isEmpty()) {
+                    handleCmd("planlar")
+                    return
+                }
+                if (first == "plan") {
+                    handleCmd("başlat " + arg)
+                    return
+                }
                 val n = findProfile(arg)
                 if (n == null) push("Profil bulunamadı: " + arg + "\nKayıtlılar için: profiller", 3)
                 else ui {
