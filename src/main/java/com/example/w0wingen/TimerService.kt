@@ -2004,6 +2004,7 @@ class TimerService : AccessibilityService() {
         fightsSinceRec++
         val now = System.currentTimeMillis()
         if (on("potOn") && now - lastPot >= cfgI("potWatchSec", 60) * 1000L) potCheckNow()
+        angelCheck()
         if (on("recycleOn")) {
             val n = cfgI("recycleKillEvery", 0)
             val byKills = n > 0 && fightsSinceRec >= n
@@ -2016,6 +2017,51 @@ class TimerService : AccessibilityService() {
     }
 
     @Volatile private var fightsSinceRec = 0
+    @Volatile private var lastAngelChk = 0L
+
+    /** Alt çubukta Angel yuvasındaki parlak (simge) piksel oranı. Boş yuva koyu ve düzdür. */
+    private fun angelFrac(b: Bitmap): Float {
+        val p = pt("angel")
+        val cx = (p.first * b.width).toInt()
+        val cy = (p.second * b.height).toInt()
+        val hw = maxOf(4, (0.012f * b.width).toInt())
+        val hh = maxOf(4, (0.022f * b.height).toInt())
+        var hit = 0
+        var tot = 0
+        var y = maxOf(0, cy - hh)
+        while (y < minOf(b.height, cy + hh)) {
+            var x = maxOf(0, cx - hw)
+            while (x < minOf(b.width, cx + hw)) {
+                val c = b.getPixel(x, y)
+                val lum = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
+                if (lum > 150) hit++
+                tot++
+                x += 2
+            }
+            y += 2
+        }
+        return if (tot == 0) 0f else hit.toFloat() / tot
+    }
+
+    private fun angelPresent(b: Bitmap): Boolean = angelFrac(b) >= cfgI("angelThr", 30) / 1000f
+
+    /** Angel açıkken ve "Angel al" kaydı varsa: Angel simgesi yuvada yoksa (iki ölçümde) kayıtlı işlemle alınır. */
+    private fun angelCheck() {
+        if (!on("angelOn") || !hasPt("angel") || !macroHas("angelbuy")) return
+        val now = System.currentTimeMillis()
+        if (now - lastAngelChk < 30000L) return
+        lastAngelChk = now
+        closeMapIfOpen()
+        val b1 = shot() ?: return
+        if (angelPresent(b1)) return
+        pause(800)
+        val b2 = shot() ?: return
+        if (angelPresent(b2)) return
+        say("Angel simgesi yok, kayıtlı işlem oynatılıyor")
+        playMacro("angelbuy")
+        ev("Angel alındı (kayıtlı işlem)", true, 2)
+        lastAngelChk = System.currentTimeMillis()
+    }
 
     /** Pot sayısını OCR ile okur; eşiğin altındaki pot varsa alır. Süreye değil okumaya bağlı. */
     private fun potCheckNow() {
@@ -2961,6 +3007,11 @@ class TimerService : AccessibilityService() {
                     buttons(listOf<Pair<String, () -> Unit>>("Ayar (işaretle)" to { toggleMenu() }, "Oku (test)" to { runManual { ownerTest() } }))
                 }
                 "macroTpOn" -> hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. Kayıtlar Bakım sekmesinde.")
+                "angelOn" -> {
+                    hint("Angel simgesi alt çubukta yoksa Bakım > Kayıtlı işlemler > Angel al kaydı oynatılır. Angel noktasını yuvanın tam ortasına işaretle.")
+                    step("Simge eşiği (‰ parlak piksel)", "angelThr", 30, 1, 500) { 5 }
+                    buttons(listOf<Pair<String, () -> Unit>>("Kontrol (test)" to { runManual { angelTest() } }))
+                }
                 else -> hint("Bu seçeneğin ek ayarı yok.")
             }
         }
@@ -5499,7 +5550,7 @@ class TimerService : AccessibilityService() {
 
     private class Gest(val x1: Float, val y1: Float, val x2: Float, val y2: Float, val dur: Long, val gap: Long)
 
-    private val macroNames = listOf(Pair("recycle", "Recycle"), Pair("pothp", "HP pot al"), Pair("potmp", "MP pot al"), Pair("rndbuy", "Random al"))
+    private val macroNames = listOf(Pair("recycle", "Recycle"), Pair("pothp", "HP pot al"), Pair("potmp", "MP pot al"), Pair("rndbuy", "Random al"), Pair("angelbuy", "Angel al"))
     private val macroLabels = HashMap<String, TextView>()
     private val macroBase = HashMap<String, String>()
     private var recOverlay: View? = null
@@ -6351,6 +6402,17 @@ class TimerService : AccessibilityService() {
         if (ownerStrikes < 2) return null
         ownerStrikes = 0
         return oth
+    }
+
+    private fun angelTest() {
+        if (!hasPt("angel")) {
+            say("Önce Ayar'da angel noktasını işaretle")
+            return
+        }
+        val b = shot() ?: fail("Ekran görüntüsü alınamadı")
+        val f = angelFrac(b)
+        say("Angel yuvası parlak oran: " + String.format("%.1f", f * 1000f) + "‰ (eşik " + cfgI("angelThr", 30) + "‰) → " + (if (angelPresent(b)) "simge VAR" else "simge YOK") +
+            "\nKayıt: " + (if (macroHas("angelbuy")) "var" else "yok"))
     }
 
     private fun ownerTest() {
