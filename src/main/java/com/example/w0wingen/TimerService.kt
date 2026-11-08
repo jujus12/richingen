@@ -237,7 +237,13 @@ class TimerService : AccessibilityService() {
         // ---- ayar profilleri: cfg_* değerleri (bildirim konusu ve harita listesi hariç) adla saklanır
         val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds", "hidden", "ignorepts", "buffStep")
 
-        private fun profKey(k: String) = k.startsWith("cfg_") && k != "cfg_ntfy" && k != "cfg_maps"
+        private val PROFILE_SKIP = setOf(
+            "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
+            "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
+        )
+
+        /** Plan = tüm ayarlar: cfg_*, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota listeleri. Pencere konumu, tema, süre kayıtları ve istatistikler hariç. */
+        private fun profKey(k: String) = !k.startsWith("profile_") && !k.startsWith("stat_") && !PROFILE_SKIP.contains(k)
 
         fun profileNames(p: android.content.SharedPreferences): List<String> =
             p.getString("profile_names", "")!!.split("\n").filter { it.isNotBlank() }
@@ -246,12 +252,19 @@ class TimerService : AccessibilityService() {
             val name = rawName.replace("\n", " ").trim().take(20)
             if (name.isEmpty()) return ""
             val o = org.json.JSONObject()
+            val tm = org.json.JSONObject()
             for ((k, v) in p.all) {
                 if (!profKey(k)) continue
-                if (v is Boolean) o.put(k, v) else if (v is String) o.put(k, v)
+                when (v) {
+                    is Boolean -> { o.put(k, v); tm.put(k, "b") }
+                    is String -> o.put(k, v)
+                    is Int -> { o.put(k, v); tm.put(k, "i") }
+                    is Long -> { o.put(k, v); tm.put(k, "l") }
+                    is Float -> { o.put(k, v.toDouble()); tm.put(k, "f") }
+                }
             }
+            o.put("__t", tm)
             for (t in TOGGLES) if (!o.has("cfg_" + t.first)) o.put("cfg_" + t.first, t.third)
-            for (k in PROFILE_EXTRA) { val v = p.getString(k, null); if (v != null) o.put(k, v) }
             val names = profileNames(p).toMutableList()
             if (!names.contains(name)) names.add(name)
             p.edit().putString("profile_" + name, o.toString()).putString("profile_names", names.joinToString("\n"))
@@ -263,14 +276,21 @@ class TimerService : AccessibilityService() {
             val js = p.getString("profile_" + name, null) ?: return false
             val o = org.json.JSONObject(js)
             val e = p.edit()
-            for (k in p.all.keys) if (profKey(k) && !o.has(k)) e.remove(k)
+            for (k in p.all.keys) if (k.startsWith("cfg_") && profKey(k) && !o.has(k)) e.remove(k)
+            val tm = o.optJSONObject("__t") ?: org.json.JSONObject()
             val it = o.keys()
             while (it.hasNext()) {
                 val k = it.next()
+                if (k == "__t" || !profKey(k)) continue
                 val v = o.get(k)
-                if (v is Boolean) e.putBoolean(k, v) else e.putString(k, v.toString())
+                when (tm.optString(k, "")) {
+                    "b" -> e.putBoolean(k, o.getBoolean(k))
+                    "i" -> e.putInt(k, o.getInt(k))
+                    "l" -> e.putLong(k, o.getLong(k))
+                    "f" -> e.putFloat(k, o.getDouble(k).toFloat())
+                    else -> if (v is Boolean) e.putBoolean(k, v) else e.putString(k, v.toString())
+                }
             }
-            for (k in PROFILE_EXTRA) if (o.has(k)) e.putString(k, o.getString(k))
             e.putString("profile_active", name).apply()
             return true
         }
@@ -2986,6 +3006,22 @@ class TimerService : AccessibilityService() {
         loadProfile(names[(names.indexOf(a) + 1) % names.size])
     }
 
+    /** Tek tuşla: planı (profili) yükler ve otomasyonu başlatır. */
+    private fun startPlan(name: String) {
+        if (autoRunning || busy) {
+            say("Otomasyon açık. Önce durdur.")
+            toast("Önce otomasyonu durdur")
+            return
+        }
+        loadProfile(name)
+        val need = missingForAuto()
+        if (need.isNotEmpty()) {
+            say("Başlatılamadı, eksik nokta: " + need.joinToString(", "))
+            return
+        }
+        startAuto()
+    }
+
     private fun loadProfile(next: String) {
         if (autoRunning || busy) {
             say("Otomasyon açıkken profil değişmez. Önce durdur.")
@@ -3103,6 +3139,10 @@ class TimerService : AccessibilityService() {
             }
             hs.addView(row)
             box.addView(hs, lpTop(dp(38)))
+            if (active.isNotEmpty()) {
+                val go = mkBtn("▶  " + active + " planını başlat", OK, 0xFF04200F.toInt()) { startPlan(active) }
+                box.addView(go, lpTop(dp(40)))
+            }
         }
 
         // KONTROL MERKEZİ: satır satır. Sağdaki anahtar aç/kapatır, soldaki isme basınca o seçeneğin ayarları açılır/kapanır.

@@ -146,7 +146,7 @@ class MainActivity : Activity() {
 
         val profCard = card(col, "Profiller")
         val profHint = TextView(this)
-        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Merkez sekmesinden profiller arasında geçebilirsin. Bildirim konusu ve harita listesi profile dahil değildir."
+        profHint.text = "Şu anki ayarlarını (sayılar ve açık/kapalı düğmeler) bir adla kaydet. Oyundaki Merkez sekmesinden profiller arasında geçebilirsin. Profil (plan) tüm ayarları içerir: düğmeler, sayılar, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota/golden/red listeleri. Bildirim konusu, harita listesi, tema ve pencere konumları dahil değildir. Oyunda Merkez > plan başlat düğmesi ya da ntfy: plan <ad>."
         profHint.textSize = 11f
         profHint.setTextColor(DIM)
         profCard.addView(profHint)
