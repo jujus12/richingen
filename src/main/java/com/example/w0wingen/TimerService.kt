@@ -243,7 +243,7 @@ class TimerService : AccessibilityService() {
         )
 
         /** Plan = tüm ayarlar: cfg_*, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota listeleri. Pencere konumu, tema, süre kayıtları ve istatistikler hariç. */
-        private fun profKey(k: String) = !k.startsWith("profile_") && !k.startsWith("stat_") && !PROFILE_SKIP.contains(k)
+        private fun profKey(k: String) = !k.startsWith("profile_") && !k.startsWith("stat_") && !k.startsWith("sect_") && !k.startsWith("mg_") && !k.startsWith("card_open_") && !PROFILE_SKIP.contains(k)
 
         fun profileNames(p: android.content.SharedPreferences): List<String> =
             p.getString("profile_names", "")!!.split("\n").filter { it.isNotBlank() }
@@ -333,6 +333,8 @@ class TimerService : AccessibilityService() {
     private var stopLp: WindowManager.LayoutParams? = null
     private var dockSc: TextView? = null
     private var dockScLp: WindowManager.LayoutParams? = null
+    private var dockSv: TextView? = null
+    private var dockSvLp: WindowManager.LayoutParams? = null
     private var toolsBox: LinearLayout? = null
     private var panelLp: WindowManager.LayoutParams? = null
     private var handleLp: WindowManager.LayoutParams? = null
@@ -426,12 +428,14 @@ class TimerService : AccessibilityService() {
                 handle?.let { wm.removeView(it) }
                 stopWin?.let { wm.removeView(it) }
                 dockSc?.let { wm.removeView(it) }
+                dockSv?.let { wm.removeView(it) }
             } catch (e: Exception) {
             }
             panel = null
             handle = null
             stopWin = null
             dockSc = null
+            dockSv = null
             sizeBtns.clear()
             applyTheme()
             buildUi()
@@ -550,6 +554,7 @@ class TimerService : AccessibilityService() {
             handle?.let { wm.removeView(it) }
             stopWin?.let { wm.removeView(it) }
             dockSc?.let { wm.removeView(it) }
+            dockSv?.let { wm.removeView(it) }
             menu?.let { wm.removeView(it) }
         } catch (e: Exception) {
         }
@@ -1527,7 +1532,7 @@ class TimerService : AccessibilityService() {
             try {
                 if (through) {
                     val m = dp(24)
-                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp), Pair(dockSc, dockScLp))
+                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp), Pair(dockSc, dockScLp), Pair(dockSv, dockSvLp))
                     for ((v, lp) in cands) {
                         if (v == null || lp == null || v.visibility != View.VISIBLE) continue
                         val w = if (v.width > 0) v.width else lp.width
@@ -3188,17 +3193,28 @@ class TimerService : AccessibilityService() {
             cur.addView(h, lpTop())
         }
 
+        /** Kayıtlı işlem satırı: durum + kaydet / dene / sil. */
+        fun macroLine(k: String, label: String) {
+            hint(label + " kaydı: " + (if (macroHas(k)) "var" else "yok"))
+            buttons(listOf<Pair<String, () -> Unit>>(
+                "● Kaydet" to { startRecording(k) },
+                "▶ Dene" to { if (macroHas(k)) runManual { playMacro(k) } else say("Önce kaydet: " + label) },
+                "✕ Sil" to { prefs().edit().remove("macro_" + k).apply(); refreshHome() }
+            ))
+        }
+
         fun settingsFor(key: String) {
             when (key) {
                 "potOn" -> {
                     step("Pot eşiği", "potMin", 20, 0, 999) { 5 }
                     step("Pot okuma (sn)", "potWatchSec", 60, 10, 600) { 10 }
-                    step("Random eşiği (0=kapalı)", "rndMin", 0, 0, 999) { 5 }
-                    hint("Random sayısının yeri Ayar > Envanter grubunda, alma işlemi Bakım > Kayıtlı işlemler > Random al ile kaydedilir.")
+                    macroLine("pothp", "HP pot al")
+                    macroLine("potmp", "MP pot al")
                 }
                 "recycleOn" -> {
                     step("Her kaç kesimde Recycle (0=kapalı)", "recycleKillEvery", 0, 0, 50) { 1 }
                     step("Recycle aralığı (dk)", "recycleEvery", 20, 1, 240) { 5 }
+                    macroLine("recycle", "Recycle")
                 }
                 "farmOn" -> {
                     step("Farm wire'ı", "farmWire", 3, 1, 3) { 1 }
@@ -3224,6 +3240,9 @@ class TimerService : AccessibilityService() {
                 "randomOn" -> {
                     step("Random yarıçap (px) · tüm modlar", "radius", 200, 0, 1000) { 25 }
                     step("En fazla Random", "randomMax", 40, 1, 200) { 5 }
+                    step("Random sayısı eşiği (0=kapalı)", "rndMin", 0, 0, 999) { 5 }
+                    hint("Alt çubuktaki Random sayısı eşiğin altına düşünce kayıtlı 'Random al' işlemi oynatılır. Sayının yeri: Ayar > Envanter > rndCount.")
+                    macroLine("rndbuy", "Random al")
                 }
                 "goldOn" -> {
                     buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (goldMapName().ifEmpty { "seç" }) + "  ▸" to { pickGoldMap() }))
@@ -3274,6 +3293,7 @@ class TimerService : AccessibilityService() {
                     hint("Angel simgesi alt çubukta yoksa Bakım > Kayıtlı işlemler > Angel al kaydı oynatılır. Angel noktasını yuvanın tam ortasına işaretle.")
                     step("Simge eşiği (‰ parlak piksel)", "angelThr", 30, 1, 500) { 5 }
                     buttons(listOf<Pair<String, () -> Unit>>("Kontrol (test)" to { runManual { angelTest() } }))
+                    macroLine("angelbuy", "Angel al")
                 }
                 else -> hint("Bu seçeneğin ek ayarı yok.")
             }
@@ -3366,6 +3386,7 @@ class TimerService : AccessibilityService() {
             it.alpha = if (act) 1f else 0.55f
         }
         dockSc?.visibility = View.VISIBLE
+        dockSv?.visibility = View.VISIBLE
         val mode = if (autoRunning) "▶" else if (busy) "⚙" else "⏱"
         handle?.text = (if (panelOpen) "▸" else "◂") + "\n" + mode
         placeBar()
@@ -3458,6 +3479,16 @@ class TimerService : AccessibilityService() {
                 try {
                     wm.updateViewLayout(dv, dl)
                 } catch (e: Exception) {
+                }
+                val vl = dockSvLp
+                val vv = dockSv
+                if (vl != null && vv != null) {
+                    vl.x = dl.x
+                    vl.y = if (below) minOf(dl.y + sh2 + dp(4), maxOf(0, screenH - sh2)) else maxOf(0, dl.y - sh2 - dp(4))
+                    try {
+                        wm.updateViewLayout(vv, vl)
+                    } catch (e: Exception) {
+                    }
                 }
             }
         }
@@ -3554,17 +3585,32 @@ class TimerService : AccessibilityService() {
         val tabMaint = LinearLayout(this)
         tabMaint.orientation = LinearLayout.VERTICAL
         fun sect(parent: LinearLayout, title: String): LinearLayout {
-            val box = LinearLayout(this)
-            box.orientation = LinearLayout.VERTICAL
+            val outerBox = LinearLayout(this)
+            outerBox.orientation = LinearLayout.VERTICAL
             val lab = TextView(this)
-            lab.text = title
             lab.textSize = 11f
             lab.setTextColor(TEXT_DIM)
             lab.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            lab.setPadding(0, dp(10), 0, dp(2))
-            box.addView(lab)
-            parent.addView(box)
-            return box
+            lab.setPadding(0, dp(10), 0, dp(6))
+            val body = LinearLayout(this)
+            body.orientation = LinearLayout.VERTICAL
+            val sk = "sect_" + title.take(24)
+            var open = prefs().getBoolean(sk, !title.startsWith("HARİTA IŞINLANMA"))
+            fun ap() {
+                lab.text = (if (open) "▾  " else "▸  ") + title
+                body.visibility = if (open) View.VISIBLE else View.GONE
+            }
+            ap()
+            lab.setOnClickListener {
+                open = !open
+                prefs().edit().putBoolean(sk, open).apply()
+                ap()
+                panel?.post { placeBar() }
+            }
+            outerBox.addView(lab)
+            outerBox.addView(body)
+            parent.addView(outerBox)
+            return body
         }
         val bw = mkBtn("📋  Bosslar penceresi") { toggleBossWin() }
         bw.textSize = 13f
@@ -3975,7 +4021,7 @@ class TimerService : AccessibilityService() {
             t.typeface = android.graphics.Typeface.DEFAULT_BOLD
             t.setOnClickListener { showTab(k) }
             tabBtns.add(t)
-            tabBar.addView(t, LinearLayout.LayoutParams(0, dp(34), 1f))
+            tabBar.addView(t, LinearLayout.LayoutParams(0, dp(40), 1f))
         }
         val tbl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         tbl.topMargin = dp(6)
@@ -4080,6 +4126,22 @@ class TimerService : AccessibilityService() {
         dockSc = kb
         dockScLp = klp
         applyFont(kb)
+
+        // Kaydet: panel kapalıyken de tek dokunuşla boss kaydı
+        val kv = TextView(this)
+        kv.text = "● Kaydet"
+        kv.textSize = 12f
+        kv.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        kv.gravity = Gravity.CENTER
+        kv.setTextColor(0xFF04200F.toInt())
+        kv.background = rounded(OK, 12)
+        kv.setPadding(dp(8), dp(6), dp(8), dp(6))
+        kv.setOnClickListener { runManual { doSave() } }
+        val vlp = overlayParams(dp(82))
+        wm.addView(kv, vlp)
+        dockSv = kv
+        dockSvLp = vlp
+        applyFont(kv)
         updateUi()
     }
 
@@ -4109,6 +4171,18 @@ class TimerService : AccessibilityService() {
         tick()
     }
 
+    private val GROUP_COLORS = intArrayOf(
+        0xFFB48AE0.toInt(), 0xFF4FC3F7.toInt(), 0xFFFFB74D.toInt(), 0xFF81C784.toInt(),
+        0xFFFF6B81.toInt(), 0xFFFFF176.toInt(), 0xFF4DB6AC.toInt(), 0xFFF06292.toInt()
+    )
+
+    /** Aynı harita + wire'daki bossların rengi aynıdır (haritaya ve wire'a göre sıralı gruplara palet sırayla verilir). */
+    private fun groupColor(e: Entry): Int {
+        val keys = snapshot().map { key(it.map) + "|" + it.wire }.distinct().sorted()
+        val i = keys.indexOf(key(e.map) + "|" + e.wire)
+        return GROUP_COLORS[(if (i < 0) 0 else i) % GROUP_COLORS.size]
+    }
+
     private fun rowFor(e: Entry): View {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
@@ -4116,7 +4190,7 @@ class TimerService : AccessibilityService() {
         row.background = rounded(CARD_BG, 10)
 
         val strip = View(this)
-        stripViews[e.id] = strip
+        strip.setBackgroundColor(groupColor(e))
         row.addView(strip, LinearLayout.LayoutParams(dp(4), LinearLayout.LayoutParams.MATCH_PARENT))
 
         val left = LinearLayout(this)
@@ -4173,7 +4247,6 @@ class TimerService : AccessibilityService() {
                 else -> Color.WHITE
             }
             tv.setTextColor(c)
-            stripViews[e.id]?.setBackgroundColor(c)
         }
     }
 
@@ -4254,9 +4327,13 @@ class TimerService : AccessibilityService() {
             row.orientation = LinearLayout.HORIZONTAL
             row.gravity = Gravity.CENTER_VERTICAL
             row.background = rounded(CARD_BG, 10)
-            row.setPadding(dp(12), dp(8), dp(8), dp(8))
+            row.setPadding(0, 0, dp(8), 0)
+            val gstrip = View(this)
+            gstrip.setBackgroundColor(groupColor(e))
+            row.addView(gstrip, LinearLayout.LayoutParams(dp(6), LinearLayout.LayoutParams.MATCH_PARENT))
             val left = LinearLayout(this)
             left.orientation = LinearLayout.VERTICAL
+            left.setPadding(dp(10), dp(8), 0, dp(8))
             val n1 = TextView(this)
             n1.text = (if (e.id == currentId) "▶ " else "") + shortTitle(e)
             n1.textSize = 15f
@@ -7368,8 +7445,23 @@ class TimerService : AccessibilityService() {
             gh.textSize = 12f
             gh.setTextColor(ACCENT)
             gh.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            gh.setPadding(0, dp(12), 0, dp(2))
+            gh.setPadding(0, dp(12), 0, dp(6))
             list.addView(gh)
+            val gbody = LinearLayout(this)
+            gbody.orientation = LinearLayout.VERTICAL
+            list.addView(gbody)
+            val gk = "mg_" + g.first.take(12)
+            var gopen = prefs().getBoolean(gk, true)
+            fun gap2() {
+                gh.text = (if (gopen) "▾  " else "▸  ") + g.first
+                gbody.visibility = if (gopen) View.VISIBLE else View.GONE
+            }
+            gap2()
+            gh.setOnClickListener {
+                gopen = !gopen
+                prefs().edit().putBoolean(gk, gopen).apply()
+                gap2()
+            }
             for (n in g.second) {
                 val set = prefs().contains(n + "_x") || DEFAULTS.containsKey(n)
                 val label = LABELS[n] ?: ("PM'de " + n.removePrefix("link_") + " haritasının ışınlanma bağlantısı")
@@ -7379,7 +7471,7 @@ class TimerService : AccessibilityService() {
                 btn.textSize = 11f
                 btn.gravity = Gravity.START or Gravity.CENTER_VERTICAL
                 btn.setPadding(dp(12), dp(8), dp(12), dp(8))
-                addBtn(list, btn)
+                addBtn(gbody, btn)
             }
         }
         val sv = ScrollView(this)
