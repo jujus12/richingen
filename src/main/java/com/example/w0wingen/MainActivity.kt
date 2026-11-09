@@ -260,6 +260,25 @@ class MainActivity : Activity() {
         ntfyEdit.setPadding(dp(10), dp(8), dp(10), dp(8))
         ph.addView(ntfyEdit, lp(dp(8)))
 
+        val nc = card(col, "ntfy komutları")
+        val ncHint = TextView(this)
+        ncHint.text = "Kendi kısayol komutlarını yaz: her satıra  komut = eylem  biçiminde. Eylem aşağıdaki hazır komutlardan biri olur; birkaçını ; ile art arda yazabilirsin.\n" +
+            "Örnek:  sabah = plan Golden\n          gece = durdur ; plan Gece\n          gold = aç golden\n\n" +
+            "Hazır komutlar: durum · log · ekran · planlar · plan <ad> (yükle ve başlat) · profil <ad> (sadece yükle) · başlat [ad] · durdur · seçenekler · aç <seçenek> · kapat <seçenek> · reddet · iptal"
+        ncHint.textSize = 11f
+        ncHint.setTextColor(DIM)
+        nc.addView(ncHint)
+        cmdEdit = EditText(this)
+        cmdEdit.setText(prefs().getString("ntfyCmds", ""))
+        cmdEdit.setTextColor(Color.WHITE)
+        cmdEdit.textSize = 13f
+        cmdEdit.minLines = 4
+        cmdEdit.gravity = Gravity.TOP or Gravity.START
+        cmdEdit.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        cmdEdit.background = rounded(INPUT, 10)
+        cmdEdit.setPadding(dp(10), dp(8), dp(10), dp(8))
+        nc.addView(cmdEdit, lp(dp(8)))
+
         val farm = card(col, "Farm")
         farmOn = sw(farm, "Boss yokken farm konumuna git", "cfg_farmOn", true)
         idleFarmOn = sw(farm, "Boşta farm: belirlenen süre hiçbir şey kesilmezse farm konumuna git (rota/golden/red açıkken de çalışır)", "cfg_idleFarmOn", false)
@@ -336,12 +355,14 @@ class MainActivity : Activity() {
             e.putBoolean("cfg_buffOn", buffOn.isChecked)
             e.putBoolean("cfg_potOn", potOn.isChecked)
             e.putBoolean("cfg_recycleOn", recycleOn.isChecked)
+            e.putString("ntfyCmds", cmdEdit.text.toString().trim())
             e.putString("cfg_ntfy", ntfyEdit.text.toString().trim().replace(Regex("[^A-Za-z0-9_-]"), ""))
             val m = mapsEdit.text.toString().trim()
             e.putString("cfg_maps", if (m.isEmpty()) TimerService.DEFAULT_MAPS else m)
             e.apply()
     }
 
+    private lateinit var cmdEdit: EditText
     private lateinit var profBox: LinearLayout
     private lateinit var profName: EditText
 

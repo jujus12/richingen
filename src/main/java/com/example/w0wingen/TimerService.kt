@@ -238,7 +238,7 @@ class TimerService : AccessibilityService() {
         val PROFILE_EXTRA = listOf("routeMaps", "goldMap", "redMap", "golds", "reds", "hidden", "ignorepts", "buffStep")
 
         private val PROFILE_SKIP = setOf(
-            "tabs5", "tabs6", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
+            "tabs5", "tabs6", "ntfyCmds", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
             "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
         )
 
@@ -7253,7 +7253,41 @@ class TimerService : AccessibilityService() {
         return TOGGLES.firstOrNull { it.second.lowercase() == a || it.first.lowercase() == a || it.first.lowercase() == a + "on" }
     }
 
+    private var cmdDepth = 0
+
+    /** Kullanıcının uygulamada tanımladığı komut takma adları: "komut = eylem ; eylem". */
+    private fun aliasFor(raw: String): String? {
+        val low = raw.lowercase().trim()
+        val word = low.substringBefore(' ')
+        val rest = raw.trim().substringAfter(' ', "").trim()
+        for (line in (prefs().getString("ntfyCmds", "") ?: "").lines()) {
+            val i = line.indexOf('=')
+            if (i <= 0) continue
+            val k = line.substring(0, i).trim().lowercase()
+            val v = line.substring(i + 1).trim()
+            if (k.isEmpty() || v.isEmpty()) continue
+            if (k == low) return v
+            if (k == word && rest.isNotEmpty()) return v + " " + rest
+        }
+        return null
+    }
+
     private fun handleCmd(cmd: String) {
+        if (cmdDepth < 2) {
+            val al = aliasFor(cmd)
+            if (al != null) {
+                cmdDepth++
+                try {
+                    for (part in al.split(";")) if (part.isNotBlank()) {
+                        handleCmd(part)
+                        Thread.sleep(1500)
+                    }
+                } finally {
+                    cmdDepth--
+                }
+                return
+            }
+        }
         val tp = topic()
         val raw = cmd.trim()
         val first = raw.lowercase().substringBefore(' ')
