@@ -239,7 +239,7 @@ class TimerService : AccessibilityService() {
 
         private val PROFILE_SKIP = setOf(
             "tabs5", "tabs6", "ntfyCmds", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
-            "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
+            "bfx", "bfy", "bfSize", "bfOpen", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
         )
 
         /** Plan = tüm ayarlar: cfg_*, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota listeleri. Pencere konumu, tema, süre kayıtları ve istatistikler hariç. */
@@ -541,6 +541,7 @@ class TimerService : AccessibilityService() {
         closeBossWin()
         closeStopwatch()
         closeShortcuts()
+        closeBossFloat()
         closePick()
         closeProto()
         prefListener?.let { prefs().unregisterOnSharedPreferenceChangeListener(it) }
@@ -1532,7 +1533,7 @@ class TimerService : AccessibilityService() {
             try {
                 if (through) {
                     val m = dp(24)
-                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp), Pair(dockSc, dockScLp), Pair(dockSv, dockSvLp))
+                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp), Pair(dockSc, dockScLp), Pair(dockSv, dockSvLp), Pair(bfWin, bfLp))
                     for ((v, lp) in cands) {
                         if (v == null || lp == null || v.visibility != View.VISIBLE) continue
                         val w = if (v.width > 0) v.width else lp.width
@@ -3617,6 +3618,9 @@ class TimerService : AccessibilityService() {
         val bwlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36))
         bwlp.topMargin = dp(6)
         tabBoss.addView(bw, bwlp)
+        val bf = mkBtn("◈  Boss ekranı (yüzen, taşınır)") { toggleBossFloat() }
+        bf.textSize = 13f
+        tabBoss.addView(bf, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
 
         // boss listesi
         val col = LinearLayout(this)
@@ -4146,6 +4150,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun rebuildList() {
+        bfRender()
         if (bossWin != null) {
             val gw = goldWinOpen
             val sw = stampWinOpen
@@ -4229,6 +4234,7 @@ class TimerService : AccessibilityService() {
 
     private fun tick() {
         updateStats()
+        bfTick()
         val now = System.currentTimeMillis()
         val lead = cfgI("leadSec", 20)
         for (e in snapshot()) {
@@ -7103,6 +7109,182 @@ class TimerService : AccessibilityService() {
             grid(cat.map { it.key }.filter { !chosen.contains(it) }, true)
         }
         applyFont(body)
+    }
+
+    // ------------------------------------------------------------------ yüzen boss ekranı
+
+    private var bfWin: LinearLayout? = null
+    private var bfLp: WindowManager.LayoutParams? = null
+    private var bfBody: LinearLayout? = null
+    private var bfTitle: TextView? = null
+    private val bfTimers = HashMap<Long, TextView>()
+    private var bfBlink = false
+
+    private fun bfScale(): Float = when (prefs().getInt("bfSize", 1)) { 0 -> 0.8f; 2 -> 1.25f; else -> 1f }
+
+    private fun closeBossFloat() {
+        val w = bfWin ?: return
+        try {
+            wm.removeView(w)
+        } catch (e: Exception) {
+        }
+        bfWin = null
+        bfBody = null
+        bfTitle = null
+        bfTimers.clear()
+        prefs().edit().putBoolean("bfOpen", false).apply()
+    }
+
+    private fun toggleBossFloat() {
+        if (bfWin != null) {
+            closeBossFloat()
+            return
+        }
+        refreshScreen()
+        val sc = bfScale()
+        val width = (dp(210) * sc).toInt()
+        val box = LinearLayout(this)
+        box.orientation = LinearLayout.VERTICAL
+        box.background = framed(PANEL_BG, 14)
+        box.setPadding(dp(8), dp(6), dp(8), dp(8))
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        val title = TextView(this)
+        title.text = "◈ BOSSLAR"
+        title.textSize = 12f
+        title.tag = "serif"
+        title.typeface = android.graphics.Typeface.SERIF
+        title.setTextColor(0xFFC9ADEB.toInt())
+        title.gravity = Gravity.CENTER_VERTICAL
+        bfTitle = title
+        head.addView(title, LinearLayout.LayoutParams(0, dp(30), 1f))
+        val sb = mkBtn("A") {
+            prefs().edit().putInt("bfSize", (prefs().getInt("bfSize", 1) + 1) % 3).apply()
+            closeBossFloat()
+            toggleBossFloat()
+        }
+        sb.textSize = 11f
+        head.addView(sb, LinearLayout.LayoutParams(dp(30), dp(28)))
+        val cb = mkBtn("✕") { closeBossFloat() }
+        cb.textSize = 11f
+        head.addView(cb, LinearLayout.LayoutParams(dp(30), dp(28)).also { it.leftMargin = dp(4) })
+        box.addView(head)
+        val body = LinearLayout(this)
+        body.orientation = LinearLayout.VERTICAL
+        val sv = ScrollView(this)
+        sv.addView(body)
+        box.addView(sv, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        bfBody = body
+        applyFont(head)
+
+        val lp = overlayParams(width)
+        lp.x = prefs().getInt("bfx", (screenW * 0.05f).toInt()).coerceIn(0, maxOf(0, screenW - width))
+        lp.y = prefs().getInt("bfy", (screenH * 0.10f).toInt()).coerceIn(0, maxOf(0, screenH - dp(100)))
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        val drag = View.OnTouchListener { _, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = ev.rawX
+                    downY = ev.rawY
+                    startX = lp.x
+                    startY = lp.y
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    lp.x = (startX + (ev.rawX - downX)).toInt().coerceIn(0, maxOf(0, screenW - box.width))
+                    lp.y = (startY + (ev.rawY - downY)).toInt().coerceIn(0, maxOf(0, screenH - box.height))
+                    try {
+                        wm.updateViewLayout(box, lp)
+                    } catch (e: Exception) {
+                    }
+                }
+                MotionEvent.ACTION_UP -> prefs().edit().putInt("bfx", lp.x).putInt("bfy", lp.y).apply()
+            }
+            true
+        }
+        title.setOnTouchListener(drag)
+        wm.addView(box, lp)
+        bfWin = box
+        bfLp = lp
+        prefs().edit().putBoolean("bfOpen", true).apply()
+        bfRender()
+    }
+
+    /** Süresi en yakın 8 boss: renk şeridi (harita+wire grubu), kısa ad, geri sayım. */
+    private fun bfRender() {
+        val body = bfBody ?: return
+        val sc = bfScale()
+        body.removeAllViews()
+        bfTimers.clear()
+        val list = snapshot().sortedBy { it.endMs }
+        if (list.isEmpty()) {
+            val t = TextView(this)
+            t.text = "Kayıt yok"
+            t.textSize = 11f * sc
+            t.setTextColor(TEXT_DIM)
+            body.addView(t)
+        }
+        for (e in list) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.background = rounded(CARD_BG, 8)
+            val strip = View(this)
+            strip.setBackgroundColor(groupColor(e))
+            row.addView(strip, LinearLayout.LayoutParams(dp(4), LinearLayout.LayoutParams.MATCH_PARENT))
+            val n = TextView(this)
+            n.text = (if (e.id == currentId) "▶ " else "") + shortTitle(e)
+            n.textSize = 11f * sc
+            n.setTextColor(if (e.id == currentId) ACCENT else Color.WHITE)
+            n.setPadding(dp(8), dp((5 * sc).toInt()), dp(4), dp((5 * sc).toInt()))
+            row.addView(n, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val tm = TextView(this)
+            tm.textSize = 13f * sc
+            tm.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            tm.setPadding(dp(4), 0, dp(8), 0)
+            bfTimers[e.id] = tm
+            row.addView(tm)
+            row.setOnClickListener {
+                if (autoRunning) say("Otomasyon açık. Önce durdur.") else runManual { goAndKill(e) }
+            }
+            body.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(4) })
+        }
+        applyFont(body)
+        bfTick()
+        bfWin?.post { try { bfWin?.let { w -> bfLp?.let { wm.updateViewLayout(w, it) } } } catch (e: Exception) { } }
+    }
+
+    /** Geri sayımları günceller; en yakın boss süresi yaklaşınca çerçeve rengi değişir (≤ gitme süresi: yeşil yanıp söner, ≤ 2 dk: turuncu). */
+    private fun bfTick() {
+        val w = bfWin ?: return
+        val now = System.currentTimeMillis()
+        val lead = cfgI("leadSec", 20)
+        var minLeft = Long.MAX_VALUE
+        for (e in snapshot()) {
+            val left = (e.endMs - now) / 1000
+            if (left < minLeft) minLeft = left
+            val tv = bfTimers[e.id] ?: continue
+            tv.text = if (left > 0) fmt(left) else "+" + fmt(-left)
+            tv.setTextColor(if (left <= lead) OK else if (left <= 120) WARN else Color.WHITE)
+        }
+        bfBlink = !bfBlink
+        val col = when {
+            minLeft == Long.MAX_VALUE -> 0
+            minLeft <= lead -> if (bfBlink) OK else 0x663DDC84
+            minLeft <= 120 -> WARN
+            else -> 0
+        }
+        if (col != 0) {
+            val g = GradientDrawable()
+            g.setColor(Color.TRANSPARENT)
+            g.cornerRadius = dp(14).toFloat()
+            g.setStroke(dp(3), col)
+            w.foreground = g
+        } else w.foreground = null
+        bfTitle?.text = "◈ BOSSLAR" + (if (minLeft != Long.MAX_VALUE && minLeft <= 120) "  " + fmt(maxOf(0L, minLeft)) else "")
     }
 
     private fun closeShortcuts() {
