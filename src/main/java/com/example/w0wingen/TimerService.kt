@@ -245,7 +245,7 @@ class TimerService : AccessibilityService() {
 
         private val PROFILE_SKIP = setOf(
             "tabs5", "tabs6", "ntfyCmds", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
-            "bfx", "bfy", "bfSize", "bfOpen", "uiStyle", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
+            "bfx", "bfy", "bfSize", "bfOpen", "uiStyle", "style3", "lastCrash", "crashPushed", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
         )
 
         /** Plan = tüm ayarlar: cfg_*, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota listeleri. Pencere konumu, tema, süre kayıtları ve istatistikler hariç. */
@@ -444,7 +444,7 @@ class TimerService : AccessibilityService() {
             dockSv = null
             sizeBtns.clear()
             applyTheme()
-            buildUi()
+            buildUiSafe()
             rebuildList()
             applyPanel()
         }
@@ -524,8 +524,54 @@ class TimerService : AccessibilityService() {
         prefs().registerOnSharedPreferenceChangeListener(l)
     }
 
+    private fun logCrash(tag: String, t: Throwable) {
+        try {
+            val t0 = java.text.SimpleDateFormat("dd.MM HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            prefs().edit().putString("lastCrash", t0 + " · " + tag + "\n" + t.stackTraceToString().take(2500)).putBoolean("crashPushed", false).commit()
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun installCrashHandler() {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { th, ex ->
+            logCrash("çöktü (" + th.name + ")", ex)
+            if (prev != null) prev.uncaughtException(th, ex)
+        }
+    }
+
+    /** Arayüz kurulurken hata olursa klasik düzene dönüp yeniden dener; hata kaydı uygulamadaki 'Son hata' kartında görünür. */
+    private fun buildUiSafe() {
+        try {
+            buildUi()
+        } catch (e: Throwable) {
+            logCrash("arayüz kurulamadı (stil " + prefs().getInt("uiStyle", 0) + ")", e)
+            try {
+                panel?.let { wm.removeView(it) }
+                handle?.let { wm.removeView(it) }
+                stopWin?.let { wm.removeView(it) }
+                dockSc?.let { wm.removeView(it) }
+                dockSv?.let { wm.removeView(it) }
+            } catch (x: Exception) {
+            }
+            panel = null
+            handle = null
+            stopWin = null
+            dockSc = null
+            dockSv = null
+            sizeBtns.clear()
+            prefs().edit().putInt("uiStyle", 0).apply()
+            try {
+                buildUi()
+            } catch (e2: Throwable) {
+                logCrash("klasik arayüz de kurulamadı", e2)
+            }
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+        installCrashHandler()
         wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         refreshScreen()
         applyTheme()
@@ -535,7 +581,7 @@ class TimerService : AccessibilityService() {
         loadReds()
         loadRoute()
         registerProfileSync()
-        buildUi()
+        buildUiSafe()
         rebuildList()
         main.postDelayed(ticker, 1000)
         startPoller()
@@ -3070,8 +3116,12 @@ class TimerService : AccessibilityService() {
     /** Arayüz stili: 0 = klasik (dar panel, üst sekmeler), 1 = konsol (geniş panel, sol ray, kutucuklu Merkez). */
     private fun neo(): Boolean = prefs().getInt("uiStyle", 0) == 1
 
+    @Volatile private var curStyle = 0
+    private val scaledViews = java.util.WeakHashMap<View, Boolean>()
+
     private fun panelW(): Int {
         val sz = prefs().getInt("uiSize", 1).coerceIn(0, 2)
+        if (prefs().getInt("uiStyle", 0) == 2) return minOf(dp(intArrayOf(340, 390, 440)[sz]), (screenW * 0.62f).toInt())
         if (neo()) return minOf(dp(intArrayOf(400, 470, 540)[sz]), (screenW * 0.7f).toInt())
         return dp(intArrayOf(200, 250, 310)[sz])
     }
@@ -3220,6 +3270,7 @@ class TimerService : AccessibilityService() {
         ui {
             buildHome(hb)
             plansBox?.let { buildPlans(it) }
+            quickBox?.let { buildQuick(it) }
         }
     }
 
@@ -3579,6 +3630,41 @@ class TimerService : AccessibilityService() {
         applyFont(box)
     }
 
+    private fun toggleIcons(): Map<String, String> = mapOf(
+        "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
+        "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin",
+        "protoOn" to "shield", "ownerOn" to "target", "popupOn" to "popup", "comboOn" to "star", "buffSoloOff" to "buff"
+    )
+
+    private var quickBox: LinearLayout? = null
+
+    /** Akış arayüzü ana ekranındaki hızlı aç/kapa kutucukları. */
+    private fun buildQuick(box: LinearLayout) {
+        box.removeAllViews()
+        val lab = TextView(this)
+        lab.text = "HIZLI AÇ / KAPA"
+        lab.textSize = 11f
+        lab.letterSpacing = 0.1f
+        lab.setTextColor(ACCENT)
+        lab.typeface = android.graphics.Typeface.DEFAULT_BOLD
+        box.addView(lab)
+        val ic = toggleIcons()
+        for (chunk in listOf("goldOn", "redOn", "routeOn", "farmOn", "buffOn", "potOn").chunked(3)) {
+            val gr = LinearLayout(this)
+            gr.orientation = LinearLayout.HORIZONTAL
+            for ((ci, key) in chunk.withIndex()) {
+                val name = TOGGLES.first { it.first == key }.second
+                val tile = mkTile(ic[key] ?: "dice", name, on(key), dp(88)) {
+                    prefs().edit().putBoolean("cfg_" + key, !on(key)).apply()
+                    updateToggles()
+                }
+                gr.addView(tile, LinearLayout.LayoutParams(0, dp(88), 1f).also { it.leftMargin = dp(if (ci > 0) 8 else 0) })
+            }
+            box.addView(gr, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(8) })
+        }
+        applyFont(box)
+    }
+
     private fun updateToggles() {
         refreshHome()
         if (scWin != null) scRender()
@@ -3647,6 +3733,9 @@ class TimerService : AccessibilityService() {
 
     /** Tüm panelde tek yazı tipi: kısık, ince çizgili sans. */
     private fun applyFont(v: View) {
+        if (curStyle == 2 && v is TextView && scaledViews.put(v, true) == null) {
+            v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, v.textSize * 1.12f)
+        }
         if (v is TextView && v.tag != "serif") {
             val bold = v.typeface?.isBold == true
             v.typeface = android.graphics.Typeface.create("sans-serif-medium", if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
@@ -3729,7 +3818,11 @@ class TimerService : AccessibilityService() {
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
         outer.background = framed(PANEL_BG, 18)
-        val neo = neo()
+        if (!prefs().getBoolean("style3", false)) prefs().edit().putInt("uiStyle", 2).putBoolean("style3", true).apply()
+        val style = prefs().getInt("uiStyle", 0)
+        curStyle = style
+        val neo = style != 0
+        val flow = style == 2
         if (neo) outer.setPadding(dp(12), dp(14), dp(12), dp(12)) else outer.setPadding(dp(16), dp(20), dp(16), dp(18))
 
         // başlık
@@ -3932,8 +4025,8 @@ class TimerService : AccessibilityService() {
             rebuildUi()
         }
         tb.addView(themeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
-        val styleBtn = mkBtn("Arayüz: " + (if (neo) "Konsol" else "Klasik") + "  ⇄") {
-            prefs().edit().putInt("uiStyle", if (neo()) 0 else 1).apply()
+        val styleBtn = mkBtn("Arayüz: " + arrayOf("Klasik", "Konsol", "Akış")[style] + "  ⇄") {
+            prefs().edit().putInt("uiStyle", (prefs().getInt("uiStyle", 0) + 1) % 3).apply()
             rebuildUi()
         }
         tb.addView(styleBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
@@ -4226,7 +4319,18 @@ class TimerService : AccessibilityService() {
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
         tabBar.orientation = LinearLayout.HORIZONTAL
+        var flowDash: View? = null
+        var flowPage: View? = null
+        var flowTitle: TextView? = null
         fun showTab(i: Int) {
+            if (flow) {
+                flowDash?.visibility = View.GONE
+                flowPage?.visibility = View.VISIBLE
+                flowTitle?.text = tabNames[i]
+                for (k in tabViews.indices) tabViews[k].visibility = if (k == i) View.VISIBLE else View.GONE
+                outer.post { placeBar() }
+                return
+            }
             for (k in tabViews.indices) {
                 tabViews[k].visibility = if (k == i) View.VISIBLE else View.GONE
                 tabBtns[k].setTextColor(if (k == i) ACCENT else TEXT_DIM)
@@ -4262,6 +4366,151 @@ class TimerService : AccessibilityService() {
             outer.addView(markScroll, tabH)
             outer.addView(maintScroll, LinearLayout.LayoutParams(tabH))
             outer.addView(toolsScroll, LinearLayout.LayoutParams(tabH))
+        } else if (flow) {
+            // AKIŞ düzeni: ana ekran (büyük başlat düğmesi, sayaçlar, hızlı kutucuklar, büyük menü satırları) ve geri düğmeli sayfalar
+            val top = LinearLayout(this)
+            top.orientation = LinearLayout.HORIZONTAL
+            top.gravity = Gravity.CENTER_VERTICAL
+            val tt = TextView(this)
+            tt.text = "RICHINGEN"
+            tt.textSize = 17f
+            tt.letterSpacing = 0.12f
+            tt.tag = "serif"
+            tt.typeface = android.graphics.Typeface.SERIF
+            tt.setTextColor(0xFFC9ADEB.toInt())
+            top.addView(tt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val pill = TextView(this)
+            pill.textSize = 11f
+            pill.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            pill.setPadding(dp(10), dp(5), dp(10), dp(5))
+            neoPill = pill
+            top.addView(pill)
+            val back = mkBtn("⇄") {
+                prefs().edit().putInt("uiStyle", 0).apply()
+                rebuildUi()
+            }
+            back.textSize = 12f
+            top.addView(back, LinearLayout.LayoutParams(dp(38), dp(32)).also { it.leftMargin = dp(8) })
+            outer.addView(top)
+
+            val stack = FrameLayout(this)
+            // --- ana ekran
+            val dash = LinearLayout(this)
+            dash.orientation = LinearLayout.VERTICAL
+            for (i in 0 until mainRow.childCount) mainRow.getChildAt(i).layoutParams.height = dp(54)
+            mainRowLp.topMargin = dp(10)
+            dash.addView(mainRow, mainRowLp)
+            val tiles = LinearLayout(this)
+            tiles.orientation = LinearLayout.HORIZONTAL
+            neoVals.clear()
+            for (lab in listOf("BOSS", "GOLDEN", "RED", "ROTA", "ÖLÜM")) {
+                val tl = LinearLayout(this)
+                tl.orientation = LinearLayout.VERTICAL
+                tl.gravity = Gravity.CENTER
+                tl.background = card(CARD_BG, 10)
+                tl.setPadding(0, dp(7), 0, dp(7))
+                val v = TextView(this)
+                v.text = "0"
+                v.textSize = 17f
+                v.gravity = Gravity.CENTER
+                v.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                v.setTextColor(Color.WHITE)
+                neoVals.add(v)
+                tl.addView(v)
+                val l = TextView(this)
+                l.text = lab
+                l.textSize = 9f
+                l.letterSpacing = 0.08f
+                l.gravity = Gravity.CENTER
+                l.setTextColor(TEXT_DIM)
+                tl.addView(l)
+                tiles.addView(tl, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(if (neoVals.size > 1) 5 else 0) })
+            }
+            dash.addView(tiles, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(10) })
+            st.setPadding(dp(2), dp(10), dp(2), dp(2))
+            dash.addView(st)
+            val qb = LinearLayout(this)
+            qb.orientation = LinearLayout.VERTICAL
+            quickBox = qb
+            dash.addView(qb, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(12) })
+            val ml = TextView(this)
+            ml.text = "MENÜ"
+            ml.textSize = 11f
+            ml.letterSpacing = 0.1f
+            ml.setTextColor(ACCENT)
+            ml.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            dash.addView(ml, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(14) })
+            val menuDefs = listOf(
+                listOf("0", "Seçenekler", "Tüm aç/kapa düğmeleri ve ayarları", "gem"),
+                listOf("1", "Planlar", "Kayıtlı planı tek tuşla başlat", "list"),
+                listOf("2", "Bosslar", "Süreler, canlı kayıt, yüzen ekran", "skull"),
+                listOf("3", "İşaretleme", "Ekran noktaları ve okuma bölgeleri", "target"),
+                listOf("4", "Bakım", "Pot, Recycle, kayıtlı işlemler", "gear"),
+                listOf("5", "Araçlar", "Tema, boyut, sayaç, kayıt", "pen")
+            )
+            for (d in menuDefs) {
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                row.gravity = Gravity.CENTER_VERTICAL
+                row.background = card(CARD_BG, 14)
+                row.setPadding(dp(14), dp(10), dp(12), dp(10))
+                row.addView(IconView(this, d[3], Color.WHITE), LinearLayout.LayoutParams(dp(30), dp(30)))
+                val col = LinearLayout(this)
+                col.orientation = LinearLayout.VERTICAL
+                val t1 = TextView(this)
+                t1.text = d[1]
+                t1.textSize = 15f
+                t1.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                t1.setTextColor(Color.WHITE)
+                col.addView(t1)
+                val t2 = TextView(this)
+                t2.text = d[2]
+                t2.textSize = 10.5f
+                t2.setTextColor(TEXT_DIM)
+                col.addView(t2)
+                row.addView(col, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(14) })
+                val ch = TextView(this)
+                ch.text = "›"
+                ch.textSize = 22f
+                ch.setTextColor(TEXT_DIM)
+                row.addView(ch)
+                val idx = d[0].toInt()
+                row.setOnClickListener { showTab(idx) }
+                dash.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(8) })
+            }
+            val dashScroll = ScrollView(this)
+            dashScroll.addView(dash)
+            // --- sayfa (geri düğmeli)
+            val page = LinearLayout(this)
+            page.orientation = LinearLayout.VERTICAL
+            val bar = LinearLayout(this)
+            bar.orientation = LinearLayout.HORIZONTAL
+            bar.gravity = Gravity.CENTER_VERTICAL
+            val bk = mkBtn("‹  Geri") {
+                flowDash?.visibility = View.VISIBLE
+                flowPage?.visibility = View.GONE
+                outer.post { placeBar() }
+            }
+            bk.textSize = 13f
+            bar.addView(bk, LinearLayout.LayoutParams(dp(100), dp(42)))
+            val pt = TextView(this)
+            pt.textSize = 17f
+            pt.tag = "serif"
+            pt.typeface = android.graphics.Typeface.SERIF
+            pt.setTextColor(0xFFC9ADEB.toInt())
+            pt.setPadding(dp(14), 0, 0, 0)
+            bar.addView(pt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            page.addView(bar)
+            val pc = FrameLayout(this)
+            for (v in tabViews) pc.addView(v, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            page.addView(pc, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).also { it.topMargin = dp(8) })
+            page.visibility = View.GONE
+            stack.addView(dashScroll, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            stack.addView(page, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            flowDash = dashScroll
+            flowPage = page
+            flowTitle = pt
+            outer.addView(stack, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.66f).toInt()).also { it.topMargin = dp(8) })
         } else {
             // KONSOL düzeni: üst çubuk (başlık, durum hapı), ana düğmeler, sayaç kutucukları, durum satırı, sol ray + içerik
             val top = LinearLayout(this)
@@ -4351,7 +4600,11 @@ class TimerService : AccessibilityService() {
         buildHome(tabHome)
         buildPlans(tabPlans)
         if (!prefs().getBoolean("tabs6", false)) prefs().edit().putInt("tab", 0).putBoolean("tabs6", true).apply()
-        showTab(prefs().getInt("tab", 0).coerceIn(0, 5))
+        if (flow) {
+            flowDash?.visibility = View.VISIBLE
+            flowPage?.visibility = View.GONE
+            quickBox?.let { buildQuick(it) }
+        } else showTab(prefs().getInt("tab", 0).coerceIn(0, 5))
         if (!neo) outer.addView(mainRow, mainRowLp)
         updateStats()
         outer.alpha = uiAlpha() / 100f

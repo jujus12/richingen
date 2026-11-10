@@ -112,6 +112,15 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val prevH = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { th, ex ->
+            try {
+                val t0 = java.text.SimpleDateFormat("dd.MM HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+                prefs().edit().putString("lastCrash", t0 + " · uygulama ekranı çöktü\n" + ex.stackTraceToString().take(2500)).commit()
+            } catch (e: Exception) {
+            }
+            if (prevH != null) prevH.uncaughtException(th, ex)
+        }
         val th = TimerService.THEMES[TimerService.themeIdx(prefs())]
         ACCENT = th[0]
         BG = th[4]
@@ -262,17 +271,50 @@ class MainActivity : Activity() {
 
         val look = card(col, "Görünüm")
         val lookHint = TextView(this)
-        lookHint.text = "Oyun üstündeki panelin düzeni. Klasik: dar panel, üstte sekmeler. Konsol: geniş panel, solda simge rayı, kutucuklu Merkez. Beğenmezsen buradan ya da panelin başlığındaki ⇄ düğmesinden geri dönebilirsin."
+        lookHint.text = "Oyun üstündeki panelin düzeni. Klasik: dar panel, üstte sekmeler. Konsol: geniş panel, solda simge rayı. Akış: büyük başlat düğmesi, hızlı kutucuklar ve geri düğmeli sayfalar. Panelin başlığındaki ⇄ ile klasiğe dönebilirsin."
         lookHint.textSize = 11f
         lookHint.setTextColor(DIM)
         look.addView(lookHint)
-        val styleSw = Switch(this)
-        styleSw.text = "Konsol arayüzü"
-        styleSw.setTextColor(Color.WHITE)
-        styleSw.textSize = 14f
-        styleSw.isChecked = prefs().getInt("uiStyle", 0) == 1
-        styleSw.setOnCheckedChangeListener { _, on -> prefs().edit().putInt("uiStyle", if (on) 1 else 0).apply() }
-        look.addView(styleSw, lp(dp(8)))
+        val styleRow = LinearLayout(this)
+        styleRow.orientation = LinearLayout.HORIZONTAL
+        val styleBtns = ArrayList<Button>()
+        fun paintStyle() {
+            val cur = prefs().getInt("uiStyle", 0)
+            for ((i, b) in styleBtns.withIndex()) {
+                b.background = rounded(if (i == cur) ACCENT else INPUT, 10)
+                b.setTextColor(if (i == cur) 0xFF04202D.toInt() else Color.WHITE)
+            }
+        }
+        for ((i, n) in listOf("Klasik", "Konsol", "Akış").withIndex()) {
+            val b = Button(this)
+            b.text = n
+            b.isAllCaps = false
+            b.setOnClickListener {
+                prefs().edit().putInt("uiStyle", i).apply()
+                paintStyle()
+            }
+            styleBtns.add(b)
+            styleRow.addView(b, LinearLayout.LayoutParams(0, dp(44), 1f).also { it.leftMargin = dp(if (i > 0) 6 else 0) })
+        }
+        paintStyle()
+        look.addView(styleRow, lp(dp(8)))
+
+        val crash = card(col, "Son hata kaydı")
+        val crashTxt = TextView(this)
+        val lc = prefs().getString("lastCrash", "") ?: ""
+        crashTxt.text = if (lc.isEmpty()) "Kayıtlı hata yok." else lc
+        crashTxt.textSize = 10.5f
+        crashTxt.setTextColor(if (lc.isEmpty()) DIM else Color.WHITE)
+        crashTxt.setTextIsSelectable(true)
+        crash.addView(crashTxt)
+        if (lc.isNotEmpty()) {
+            val clr = button("Temizle", false)
+            clr.setOnClickListener {
+                prefs().edit().remove("lastCrash").apply()
+                crashTxt.text = "Kayıtlı hata yok."
+            }
+            crash.addView(clr, lp(dp(8)))
+        }
 
         val nc = card(col, "ntfy komutları")
         val ncHint = TextView(this)
