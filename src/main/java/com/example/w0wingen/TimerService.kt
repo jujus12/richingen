@@ -2151,12 +2151,14 @@ class TimerService : AccessibilityService() {
                 val st = readStats(b)
                 if (st != null && st.first >= minA && st.second >= minD) {
                     say("Buff alındı: ATK " + st.first + " DEF " + st.second)
+                    lastBuffDone = System.currentTimeMillis()
                     return
                 }
             }
             pause(1500)
         }
         say("Buff süresi doldu")
+        lastBuffDone = System.currentTimeMillis()
     }
 
     /** Buff açıksa ATK/DEF'e bakar, ikisi de alt sınırın altındaysa buff'a gider. */
@@ -2348,15 +2350,29 @@ class TimerService : AccessibilityService() {
 
     @Volatile private var intrOn = false
     @Volatile private var buffNeeded = false
+    @Volatile private var lastBuffDone = 0L
+    private val bossFailCnt = HashMap<Long, Int>()
     @Volatile private var buffReadFails = 0
     private val recoverLog = ArrayList<Long>()
 
     private fun dueNow(): Boolean = autoRunning && nextDue() != null
 
     /** Savaş sırasında (kendi ekran görüntüsünden) buff süresine bakar; bittiyse savaşı bırakıp buff'a gitmek üzere işaretler. */
+    private fun buffTimeDue(now: Long): Boolean {
+        val every = cfgI("buffEveryMin", 0)
+        return every > 0 && lastBuffDone > 0L && now - lastBuffDone >= every * 60000L
+    }
+
     private fun fightBuff(b: Bitmap): Boolean {
         if (!autoRunning || !on("buffOn")) return false
         val now = System.currentTimeMillis()
+        if (buffTimeDue(now)) {
+            buffNeeded = true
+            ev("Buff süresi doldu (" + cfgI("buffEveryMin", 0) + " dk), savaş bırakılıp buff'a gidiliyor", true, 3)
+            setAuto(false)
+            say("Buff süresi doldu, buff'a gidiliyor")
+            return true
+        }
         if (now - lastBuffChk < cfgI("buffWatchSec", 45) * 1000L) return false
         lastBuffChk = now
         val st = readStats(b)
@@ -2406,23 +2422,6 @@ class TimerService : AccessibilityService() {
         while (autoRunning && !cancel) {
             try {
                 val now = System.currentTimeMillis()
-                // Golden protokolü bekçisi: belirli süre hiçbir şey kesilmezse uyarı verir, reddedilmezse protokol uygulanır
-                run {
-                    val tot = kills + goldKills + redKills + routeKills
-                    if (tot != protoKillTotal) {
-                        protoKillTotal = tot
-                        protoKillAt = now
-                    }
-                    val lim = cfgI("protoIdleMin", 20)
-                    if (lim > 0 && on("protoOn") && protoWin == null && now - protoKillAt >= lim * 60000L) {
-                        protoKillAt = now
-                        if (now - lastProtoAt >= cfgI("protoCooldownMin", 15) * 60000L) {
-                            ev(lim.toString() + " dk hiçbir şey kesilmedi, Golden protokolü uyarısı", true, 5)
-                            protoIdleMode = true
-                            ui { showProtoWarning(lim.toString() + " dk hiçbir şey kesilmedi", false) }
-                        }
-                    }
-                }
                 val due = nextDue()
                 val recEvery = cfgI("recycleEvery", 20) * 60000L
                 val recDue = on("recycleOn") && now - lastRecycle >= recEvery
@@ -2437,6 +2436,7 @@ class TimerService : AccessibilityService() {
                     runBoss(due)
                     continue
                 }
+                if (on("buffOn") && buffTimeDue(now)) buffNeeded = true
                 if (buffNeeded) {
                     buffNeeded = false
                     lastBuffChk = now
@@ -2522,6 +2522,7 @@ class TimerService : AccessibilityService() {
                 routeAt = false
             } catch (e: StepFail) {
                 fails++
+                if (fails >= 3) maybeProtoWarn("üst üste " + fails + " hata: " + (e.message ?: "adım hatası"))
                 goldHere = false
                 redHere = false
                 routeAt = false
@@ -2564,6 +2565,7 @@ class TimerService : AccessibilityService() {
                 throw e
             } catch (e: Exception) {
                 fails++
+                if (fails >= 3) maybeProtoWarn("üst üste " + fails + " beklenmeyen hata")
                 goldHere = false
                 redHere = false
                 routeAt = false
@@ -2599,6 +2601,7 @@ class TimerService : AccessibilityService() {
                     return@Thread
                 }
                 try {
+                    protoIdleCheck()
                     val lim = cfgI("stuckMin", 10) * 60000L
                     if (lim <= 0L || !autoRunning || !busy) continue
                     val idle = System.currentTimeMillis() - lastBeat
@@ -2609,6 +2612,36 @@ class TimerService : AccessibilityService() {
         }.start()
     }
 
+    /** Golden protokolü bekçisi (30 sn'de bir): belirli süre hiçbir şey kesilmediyse uyarı verir. İşlem takılsa bile çalışır. */
+    private fun protoIdleCheck() {
+        if (!autoRunning) return
+        val now = System.currentTimeMillis()
+        val tot = kills + goldKills + redKills + routeKills
+        if (tot != protoKillTotal) {
+            protoKillTotal = tot
+            protoKillAt = now
+        }
+        val lim = cfgI("protoIdleMin", 20)
+        if (lim > 0 && now - protoKillAt >= lim * 60000L) {
+            protoKillAt = now
+            maybeProtoWarn(lim.toString() + " dk hiçbir şey kesilmedi")
+        }
+    }
+
+    /** Çalışan otomasyon sorunluysa Golden protokolü uyarısı verir (kapalıysa ya da yakın zamanda uygulandıysa vermez). */
+    private fun maybeProtoWarn(reason: String) {
+        if (!on("protoOn") || protoWin != null) return
+        val now = System.currentTimeMillis()
+        if (now - lastProtoAt < cfgI("protoCooldownMin", 15) * 60000L) return
+        if (now - lastProtoWarnAt < 60000L) return
+        lastProtoWarnAt = now
+        ev("Golden protokolü uyarısı: " + reason, true, 5)
+        protoIdleMode = true
+        ui { showProtoWarning(reason, false) }
+    }
+
+    @Volatile private var lastProtoWarnAt = 0L
+
     private fun rescue(mins: Long) {
         val now = System.currentTimeMillis()
         rescues.removeAll { now - it > 3600000L }
@@ -2618,6 +2651,7 @@ class TimerService : AccessibilityService() {
             cancel = true
             autoRunning = false
             worker?.interrupt()
+            errorStop("takıldı, 1 saatte 3 kez kurtarılamadı")
             return
         }
         rescues.add(now)
@@ -2632,6 +2666,7 @@ class TimerService : AccessibilityService() {
         if (busy) {
             ev("Kurtarılamadı: işlem yanıt vermiyor. Uygulamayı kontrol et.", true, 5)
             autoRunning = false
+            errorStop("işlem yanıt vermiyor")
             return
         }
         cancel = false
@@ -2685,12 +2720,18 @@ class TimerService : AccessibilityService() {
         if (ok) {
             kills++
             fails = 0
+            bossFailCnt.remove(e.id)
             deathCnt.remove(e.id)
             ev("Kesildi: " + shortTitle(e) + " · yeni süre " + fmt((e.endMs - System.currentTimeMillis()) / 1000), true, 2)
             buffCheck()
         } else {
             ev("Boss başarısız: " + shortTitle(e))
-            blocked[e.id] = System.currentTimeMillis() + (if (ownerSkipped) 300000L else 90000L)
+            val n = (bossFailCnt[e.id] ?: 0) + 1
+            bossFailCnt[e.id] = n
+            val base = if (ownerSkipped) 300000L else 90000L
+            val wait = minOf(base * (1L shl minOf(n - 1, 4)), 1800000L)
+            blocked[e.id] = System.currentTimeMillis() + wait
+            if (n >= 2) ev(shortTitle(e) + " " + n + ". kez başarısız, " + (wait / 60000) + " dk atlanıyor", true, 3)
             ownerSkipped = false
         }
     }
@@ -3233,6 +3274,8 @@ class TimerService : AccessibilityService() {
                         refreshHome()
                     }
                     cur.addView(bs, lpTop(dp(34)))
+                    step("Buff süresi (dk, 0=sadece ATK/DEF'e bak)", "buffEveryMin", 0, 0, 600) { 5 }
+                    hint("Buff bitince ATK/DEF okunamazsa bile bu süre dolunca (golden dahil, red hariç) buff'a gidilir. Buff'ın oyundaki süresinden biraz kısa gir.")
                     step("Minimum ATK", "minAtk", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
                     step("Minimum DEF", "minDef", 0, 0, 999999) { prefs().getInt("buffStep", 1000) }
                     step("Buff wire'ı", "buffWire", 3, 1, 3) { 1 }
@@ -6837,7 +6880,7 @@ class TimerService : AccessibilityService() {
         outer.addView(msg)
         var left = cfgI("protoSec", 10).coerceIn(3, 60)
         fun label() {
-            msg.text = (if (test) "TEST: " else if (protoIdleMode) "Otomasyon bir süredir bir şey kesmedi:" else "Otomasyon hata verip durdu:") + "\n" + reason + "\n\n" + left + " sn içinde Golden protokolü uygulanacak"
+            msg.text = (if (test) "TEST: " else if (protoIdleMode) "Otomasyon sorun yaşıyor:" else "Otomasyon hata verip durdu:") + "\n" + reason + "\n\n" + left + " sn içinde Golden protokolü uygulanacak"
         }
         label()
         outer.addView(mkBtn("Reddet") {
