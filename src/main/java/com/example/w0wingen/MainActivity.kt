@@ -260,6 +260,20 @@ class MainActivity : Activity() {
         ntfyEdit.setPadding(dp(10), dp(8), dp(10), dp(8))
         ph.addView(ntfyEdit, lp(dp(8)))
 
+        val look = card(col, "Görünüm")
+        val lookHint = TextView(this)
+        lookHint.text = "Oyun üstündeki panelin düzeni. Klasik: dar panel, üstte sekmeler. Konsol: geniş panel, solda simge rayı, kutucuklu Merkez. Beğenmezsen buradan ya da panelin başlığındaki ⇄ düğmesinden geri dönebilirsin."
+        lookHint.textSize = 11f
+        lookHint.setTextColor(DIM)
+        look.addView(lookHint)
+        val styleSw = Switch(this)
+        styleSw.text = "Konsol arayüzü"
+        styleSw.setTextColor(Color.WHITE)
+        styleSw.textSize = 14f
+        styleSw.isChecked = prefs().getInt("uiStyle", 0) == 1
+        styleSw.setOnCheckedChangeListener { _, on -> prefs().edit().putInt("uiStyle", if (on) 1 else 0).apply() }
+        look.addView(styleSw, lp(dp(8)))
+
         val nc = card(col, "ntfy komutları")
         val ncHint = TextView(this)
         ncHint.text = "Kendi kısayol komutlarını yaz: her satıra  komut = eylem  biçiminde. Eylem aşağıdaki hazır komutlardan biri olur; birkaçını ; ile art arda yazabilirsin.\n" +

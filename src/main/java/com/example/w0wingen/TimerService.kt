@@ -114,7 +114,7 @@ class TimerService : AccessibilityService() {
 
         /** Ayar menüsündeki gruplar. "Işınlanma bağlantıları" grubu haritalara göre ayrıca eklenir. */
         val GROUPS = listOf(
-            "1 · Okuma bölgeleri (Test ile kontrol et)" to listOf("nameTL", "nameBR", "cntTL", "cntBR", "miniTL", "miniBR", "ownTL", "ownBR"),
+            "1 · Okuma bölgeleri (Test ile kontrol et)" to listOf("nameTL", "nameBR", "cntTL", "cntBR", "miniTL", "miniBR", "ownTL", "ownBR", "teamTL", "teamBR"),
             "2 · Harita" to listOf("minimap", "closeMap", "random"),
             "3 · Chat" to listOf("chat", "pmTab", "closeChat"),
             "5 · Wire (sadece Raklion'lar)" to listOf("switchBtn", "wire1", "wire2", "wire3", "switchOk"),
@@ -134,6 +134,8 @@ class TimerService : AccessibilityService() {
             "miniBR" to "Mini haritanın SAĞ ALT köşesi",
             "ownTL" to "Bossa saldırırken üstte çıkan satırın ('Lv250 ... yxesky') SOL ÜSTÜ (sahip kontrolü için)",
             "ownBR" to "Aynı satırın SAĞ ALTI (oyuncu adı dahil)",
+            "teamTL" to "Sol üstteki takım kutusunun oyuncu satırları alanının SOL ÜSTÜ (ATK/DEF yazısı hariç, Invite team düğmesi hariç)",
+            "teamBR" to "Aynı alanın SAĞ ALTI (tüm takım oyuncu can barları içinde kalsın)",
             "minimap" to "Sağ üstteki mini harita (haritayı açar)",
             "closeMap" to "Harita ekranının X (kapat) düğmesi (harita açıkken işaretle)",
             "random" to "Haritadaki Random düğmesi (harita açıkken işaretle)",
@@ -168,6 +170,8 @@ class TimerService : AccessibilityService() {
         )
 
         val DEFAULTS = mapOf(
+            "teamTL" to Pair(0.070f, 0.070f),
+            "teamBR" to Pair(0.250f, 0.270f),
             "nameTL" to Pair(0.800f, 0.000f),
             "nameBR" to Pair(0.893f, 0.045f),
             "cntTL" to Pair(0.430f, 0.240f),
@@ -214,7 +218,9 @@ class TimerService : AccessibilityService() {
             Triple("macroTpOn", "Kayıtlı ışın", false),
             Triple("protoOn", "Golden protokolü", true),
             Triple("ownerOn", "Sahip kontrolü", false),
-            Triple("popupOn", "Pencere kapatıcı", false)
+            Triple("popupOn", "Pencere kapatıcı", false),
+            Triple("comboOn", "Red + Golden (tek harita)", false),
+            Triple("buffSoloOff", "Tek kişide buff kapalı", false)
         )
 
         /** Kayıtlı tema numarası; Gotik temaya bir kez otomatik geçilir. */
@@ -239,7 +245,7 @@ class TimerService : AccessibilityService() {
 
         private val PROFILE_SKIP = setOf(
             "tabs5", "tabs6", "ntfyCmds", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
-            "bfx", "bfy", "bfSize", "bfOpen", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
+            "bfx", "bfy", "bfSize", "bfOpen", "uiStyle", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
         )
 
         /** Plan = tüm ayarlar: cfg_*, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota listeleri. Pencere konumu, tema, süre kayıtları ve istatistikler hariç. */
@@ -464,6 +470,11 @@ class TimerService : AccessibilityService() {
 
     private fun updateStats() {
         statsView?.text = statsText()
+        if (neoVals.size >= 5) {
+            val v = intArrayOf(kills, goldKills, redKills, routeKills, deaths)
+            for (i in 0 until 5) neoVals[i].text = v[i].toString()
+        }
+        updatePill()
         val key = kills.toString() + "," + goldKills + "," + redKills + "," + routeKills + "," + deaths
         if (key != statsSaved) {
             statsSaved = key
@@ -505,6 +516,8 @@ class TimerService : AccessibilityService() {
                 redHere = false
             } else if (key != null && PROFILE_EXTRA.contains(key)) {
                 syncActiveExtras(sp)
+            } else if (key == "uiStyle") {
+                rebuildUi()
             }
         }
         prefListener = l
@@ -2167,6 +2180,10 @@ class TimerService : AccessibilityService() {
         if (!on("buffOn")) return
         closeMapIfOpen()
         val b = shot() ?: return
+        if (soloBlocked(b)) {
+            say("Takımda tek kişi, buff kapalı")
+            return
+        }
         val st = readStats(b)
         val minA = cfgI("minAtk", 0)
         val minD = cfgI("minDef", 0)
@@ -2358,6 +2375,79 @@ class TimerService : AccessibilityService() {
     private fun dueNow(): Boolean = autoRunning && nextDue() != null
 
     /** Savaş sırasında (kendi ekran görüntüsünden) buff süresine bakar; bittiyse savaşı bırakıp buff'a gitmek üzere işaretler. */
+    // ---- takım satırı sayımı (tek kişide buff kapalı)
+    @Volatile private var teamAt = 0L
+    @Volatile private var teamCnt = 0
+
+    private fun isBarGreen(c: Int): Boolean {
+        val r = Color.red(c)
+        val g = Color.green(c)
+        val bl = Color.blue(c)
+        return g > 160 && r < 160 && bl < 100 && g - r > 35
+    }
+
+    /** Takım kutusundaki yeşil can barı satırlarını sayar (her satır = bir oyuncu). 0 = okunamadı. */
+    private fun teamRows(b: Bitmap): Int {
+        if (!hasPt("teamTL") || !hasPt("teamBR")) return 0
+        val a = pt("teamTL")
+        val z = pt("teamBR")
+        val x0 = (minOf(a.first, z.first) * b.width).toInt().coerceIn(0, b.width - 1)
+        val x1 = (maxOf(a.first, z.first) * b.width).toInt().coerceIn(0, b.width - 1)
+        val y0 = (minOf(a.second, z.second) * b.height).toInt().coerceIn(0, b.height - 1)
+        val y1 = (maxOf(a.second, z.second) * b.height).toInt().coerceIn(0, b.height - 1)
+        val need = maxOf(6, ((x1 - x0) * 0.25f).toInt())
+        var groups = 0
+        var inBar = false
+        var barH = 0
+        var gap = 0
+        var y = y0
+        while (y <= y1) {
+            var n = 0
+            var x = x0
+            while (x <= x1) {
+                if (isBarGreen(b.getPixel(x, y))) n++
+                x += 2
+            }
+            val hit = n * 2 >= need
+            if (hit) {
+                if (!inBar) {
+                    inBar = true
+                    barH = 0
+                }
+                barH++
+                gap = 0
+            } else if (inBar) {
+                gap++
+                if (gap > 3) {
+                    if (barH >= 3) groups++
+                    inBar = false
+                }
+            }
+            y++
+        }
+        if (inBar && barH >= 3) groups++
+        return groups
+    }
+
+    /** Tek kişide buff kapalı seçili ve takımda yalnızca 1 satır varsa true (buff yapılmaz). Okunamazsa false. */
+    private fun soloBlocked(b: Bitmap?): Boolean {
+        if (!on("buffSoloOff")) return false
+        val now = System.currentTimeMillis()
+        if (now - teamAt >= 20000L) {
+            val bm = b ?: shot() ?: return false
+            teamCnt = teamRows(bm)
+            teamAt = now
+            ev("Takım satırı: " + teamCnt)
+        }
+        return teamCnt == 1
+    }
+
+    private fun teamTest() {
+        val b = shot() ?: fail("Ekran görüntüsü alınamadı")
+        val n = teamRows(b)
+        say("Takım oyuncu satırı: " + n + (if (n == 0) " (okunamadı: Ayar > teamTL/teamBR'yi kontrol et)" else if (n == 1) " → tek kişi, buff kapalı olur" else " → buff açık kalır"))
+    }
+
     private fun buffTimeDue(now: Long): Boolean {
         val every = cfgI("buffEveryMin", 0)
         return every > 0 && lastBuffDone > 0L && now - lastBuffDone >= every * 60000L
@@ -2366,6 +2456,7 @@ class TimerService : AccessibilityService() {
     private fun fightBuff(b: Bitmap): Boolean {
         if (!autoRunning || !on("buffOn")) return false
         val now = System.currentTimeMillis()
+        if (soloBlocked(b)) return false
         if (buffTimeDue(now)) {
             buffNeeded = true
             ev("Buff süresi doldu (" + cfgI("buffEveryMin", 0) + " dk), savaş bırakılıp buff'a gidiliyor", true, 3)
@@ -2436,7 +2527,8 @@ class TimerService : AccessibilityService() {
                     runBoss(due)
                     continue
                 }
-                if (on("buffOn") && buffTimeDue(now)) buffNeeded = true
+                if (on("buffOn") && buffTimeDue(now) && !soloBlocked(null)) buffNeeded = true
+                if (buffNeeded && soloBlocked(null)) buffNeeded = false
                 if (buffNeeded) {
                     buffNeeded = false
                     lastBuffChk = now
@@ -2622,7 +2714,7 @@ class TimerService : AccessibilityService() {
             protoKillAt = now
         }
         val lim = cfgI("protoIdleMin", 20)
-        if (lim > 0 && now - protoKillAt >= lim * 60000L) {
+        if (lim > 0 && !protoGold && now - protoKillAt >= lim * 60000L) {
             protoKillAt = now
             maybeProtoWarn(lim.toString() + " dk hiçbir şey kesilmedi")
         }
@@ -2632,7 +2724,7 @@ class TimerService : AccessibilityService() {
     private fun maybeProtoWarn(reason: String) {
         if (!on("protoOn") || protoWin != null) return
         val now = System.currentTimeMillis()
-        if (now - lastProtoAt < cfgI("protoCooldownMin", 15) * 60000L) return
+        if (now - lastProtoAt < 60000L) return
         if (now - lastProtoWarnAt < 60000L) return
         lastProtoWarnAt = now
         ev("Golden protokolü uyarısı: " + reason, true, 5)
@@ -2678,6 +2770,7 @@ class TimerService : AccessibilityService() {
         }
         if (!autoRunning) return
         autoRunning = false
+        if (protoGold) protoStarting = true
         startAuto()
         ev("Kurtarma: otomasyon yeniden başlatıldı", true, 4)
     }
@@ -2936,6 +3029,7 @@ class TimerService : AccessibilityService() {
     }
 
     private fun updateUi() {
+        updatePill()
         val sb = saveBtn
         if (sb != null) {
             if (busy && !autoRunning) {
@@ -2973,7 +3067,27 @@ class TimerService : AccessibilityService() {
     private val sizeBtns = ArrayList<Button>()
     private var alphaView: TextView? = null
 
-    private fun panelW(): Int = dp(intArrayOf(200, 250, 310)[prefs().getInt("uiSize", 1).coerceIn(0, 2)])
+    /** Arayüz stili: 0 = klasik (dar panel, üst sekmeler), 1 = konsol (geniş panel, sol ray, kutucuklu Merkez). */
+    private fun neo(): Boolean = prefs().getInt("uiStyle", 0) == 1
+
+    private fun panelW(): Int {
+        val sz = prefs().getInt("uiSize", 1).coerceIn(0, 2)
+        if (neo()) return minOf(dp(intArrayOf(400, 470, 540)[sz]), (screenW * 0.7f).toInt())
+        return dp(intArrayOf(200, 250, 310)[sz])
+    }
+
+    private var neoPill: TextView? = null
+    private val neoVals = ArrayList<TextView>()
+
+    private fun updatePill() {
+        val pl = neoPill ?: return
+        val run = if (autoRunning && startedAt > 0L) "  " + fmt((System.currentTimeMillis() - startedAt) / 1000) else ""
+        when {
+            autoRunning -> { pl.text = "● ÇALIŞIYOR" + run; pl.background = card(0xFF14452A.toInt(), 10, 0xFF3DDC84.toInt()); pl.setTextColor(0xFF9BF0C0.toInt()) }
+            busy -> { pl.text = "⚙ MEŞGUL"; pl.background = card(0xFF4A3510.toInt(), 10, WARN); pl.setTextColor(WARN) }
+            else -> { pl.text = "○ BEKLEMEDE"; pl.background = card(CARD_BG, 10, 0xFF332D40.toInt()); pl.setTextColor(TEXT_DIM) }
+        }
+    }
 
     private fun uiAlpha(): Int = prefs().getInt("uiAlpha", 95).coerceIn(30, 100)
 
@@ -3217,7 +3331,7 @@ class TimerService : AccessibilityService() {
         // KONTROL MERKEZİ: satır satır. Sağdaki anahtar aç/kapatır, soldaki isme basınca o seçeneğin ayarları açılır/kapanır.
         val icons = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target", "popupOn" to "popup"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target", "popupOn" to "popup", "comboOn" to "star", "buffSoloOff" to "buff"
         )
         val cc = TextView(this)
         cc.text = "KONTROL MERKEZİ"
@@ -3309,14 +3423,13 @@ class TimerService : AccessibilityService() {
                     step("Farmda kal (dk)", "idleFarmStay", 10, 1, 120) { 1 }
                 }
                 "protoOn" -> {
-                    hint("Otomasyon hatayla durursa uyarı çıkar; reddetmezsen Golden, Pot, Recycle ve Diril açılır, Farm/Rota/Red/Boşta farm kapanır ve otomasyon yeniden başlar. Golden haritasına kayıtlı ışınlanmayla gidilir.")
+                    hint("Otomasyon her hatayla durduğunda (ya da süre boyunca kesim olmazsa) uyarı çıkar; reddetmezsen Golden, Pot, Recycle ve Diril açılır, Farm/Rota/Red/Boşta farm kapanır ve otomasyon yeniden başlar. Protokol sen müdahale edene kadar (başlat/durdur/plan) sürer, süreyle bitmez; sonraki hatalarda yeniden uygulanır.")
                     val gm = goldMapName()
                     val rec = gm.isNotEmpty() && macroHas("tp_" + gm)
                     hint("Harita: " + (gm.ifEmpty { "seçilmedi" }) + " · ışınlanma kaydı: " + (if (rec) "var" else "yok") + " · işaretli golden: " + goldSnapshot().size)
                     buttons(listOf<Pair<String, () -> Unit>>("Harita: " + (gm.ifEmpty { "seç" }) + "  ▸" to { pickGoldMap() }))
                     buttons(listOf<Pair<String, () -> Unit>>("Golden işaretle" to { runManual { goldMark() } }, "Golden listesi" to { toggleGoldWin() }))
                     step("Uyarı süresi (sn)", "protoSec", 10, 3, 60) { 1 }
-                    step("Tekrar bekleme (dk)", "protoCooldownMin", 15, 1, 120) { 5 }
                     step("Kesim yoksa devreye gir (dk, 0=kapalı)", "protoIdleMin", 20, 0, 240) { 5 }
                     buttons(listOf<Pair<String, () -> Unit>>("Uyarıyla test" to { protoTest(true) }, "Hemen başlat" to { protoTest(false) }))
                     hint("Test gerçekten çalışır: ayarları değiştirir ve otomasyonu başlatır (otomasyon kapalıyken).")
@@ -3332,6 +3445,16 @@ class TimerService : AccessibilityService() {
                     step("Tarama aralığı (sn)", "popupSec", 5, 2, 60) { 1 }
                     buttons(listOf<Pair<String, () -> Unit>>("Şimdi tara (test)" to { runManual { popupTest() } }))
                 }
+                "comboOn" -> {
+                    hint("Golden ve Red boss ikisi de açıkken tek haritada çalışır: önce haritadaki işaretli red bosslar kesilir, hepsi ölüyken golden canavarlar kesilir. Harita ve wire Red boss ayarındakinden alınır (golden haritası ayrıca gidilmez).")
+                    hint("Red haritası: " + (redMapName().ifEmpty { "seçilmedi" }) + " · Red: " + redSnapshot().size + " · Golden: " + goldSnapshot().size + " işaretli")
+                    buttons(listOf<Pair<String, () -> Unit>>("Red haritası: " + (redMapName().ifEmpty { "seç" }) + "  ▸" to { pickRedMap() }))
+                    buttons(listOf<Pair<String, () -> Unit>>("Red işaretle" to { runManual { redMark() } }, "Golden işaretle" to { runManual { goldMark() } }))
+                }
+                "buffSoloOff" -> {
+                    hint("Açıkken sol üstteki takım kutusunda yalnızca senin satırın varsa buff kontrolü ve buff gezisi yapılmaz; 2 ya da daha çok oyuncu satırı varsa buff sistemi normal çalışır. Okuma alanı: Ayar > Okuma bölgeleri > teamTL / teamBR.")
+                    buttons(listOf<Pair<String, () -> Unit>>("Say (test)" to { runManual { teamTest() } }, "Ayar (işaretle)" to { toggleMenu() }))
+                }
                 "macroTpOn" -> hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. Kayıtlar Bakım sekmesinde.")
                 "angelOn" -> {
                     hint("Angel simgesi alt çubukta yoksa Bakım > Kayıtlı işlemler > Angel al kaydı oynatılır. Angel noktasını yuvanın tam ortasına işaretle.")
@@ -3343,7 +3466,53 @@ class TimerService : AccessibilityService() {
             }
         }
 
-        for (t in TOGGLES) {
+        if (neo()) {
+            for (chunk in TOGGLES.chunked(3)) {
+                val gr = LinearLayout(this)
+                gr.orientation = LinearLayout.HORIZONTAL
+                for ((ci, t) in chunk.withIndex()) {
+                    val key = t.first
+                    val isOn = on(key)
+                    val wrapT = FrameLayout(this)
+                    val tile = mkTile(icons[key] ?: "dice", t.second, isOn, dp(92)) {
+                        prefs().edit().putBoolean("cfg_" + key, !on(key)).apply()
+                        updateToggles()
+                    }
+                    wrapT.addView(tile, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+                    val gearHit = FrameLayout(this)
+                    gearHit.setPadding(dp(8), dp(8), dp(8), dp(8))
+                    gearHit.addView(IconView(this, "gear", if (homeOpen == key) ACCENT else 0xFF8D8798.toInt()), FrameLayout.LayoutParams(dp(16), dp(16)))
+                    gearHit.setOnClickListener {
+                        homeOpen = if (homeOpen == key) "" else key
+                        refreshHome()
+                    }
+                    wrapT.addView(gearHit, FrameLayout.LayoutParams(dp(32), dp(32), Gravity.BOTTOM or Gravity.END))
+                    gr.addView(wrapT, LinearLayout.LayoutParams(0, dp(92), 1f).also { it.leftMargin = dp(if (ci > 0) 6 else 0) })
+                }
+                for (ci in chunk.size until 3) gr.addView(View(this), LinearLayout.LayoutParams(0, dp(92), 1f).also { it.leftMargin = dp(6) })
+                box.addView(gr, lpTop())
+                val open = chunk.firstOrNull { it.first == homeOpen }
+                if (open != null) {
+                    val panelBox = LinearLayout(this)
+                    panelBox.orientation = LinearLayout.VERTICAL
+                    panelBox.background = card(0x22FFFFFF, 12, 0xFF6A3FA8.toInt())
+                    panelBox.setPadding(dp(12), dp(8), dp(12), dp(10))
+                    val ttl = TextView(this)
+                    ttl.text = open.second + " ayarları"
+                    ttl.textSize = 13f
+                    ttl.tag = "serif"
+                    ttl.typeface = android.graphics.Typeface.SERIF
+                    ttl.setTextColor(0xFFC9ADEB.toInt())
+                    panelBox.addView(ttl)
+                    val lp2 = LinearLayout.LayoutParams(full, wrap)
+                    lp2.topMargin = dp(6)
+                    box.addView(panelBox, lp2)
+                    cur = panelBox
+                    settingsFor(open.first)
+                    cur = box
+                }
+            }
+        } else for (t in TOGGLES) {
             val key = t.first
             val isOn = on(key)
             val isOpen = homeOpen == key
@@ -3560,7 +3729,8 @@ class TimerService : AccessibilityService() {
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
         outer.background = framed(PANEL_BG, 18)
-        outer.setPadding(dp(16), dp(20), dp(16), dp(18))
+        val neo = neo()
+        if (neo) outer.setPadding(dp(12), dp(14), dp(12), dp(12)) else outer.setPadding(dp(16), dp(20), dp(16), dp(18))
 
         // başlık
         val head = LinearLayout(this)
@@ -3575,7 +3745,7 @@ class TimerService : AccessibilityService() {
         title.tag = "serif"
         title.typeface = android.graphics.Typeface.SERIF
         head.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        outer.addView(head)
+        if (!neo) outer.addView(head)
 
         val st = TextView(this)
         st.textSize = 11f
@@ -3584,7 +3754,7 @@ class TimerService : AccessibilityService() {
         st.setPadding(0, dp(6), 0, dp(2))
         st.text = "Hazır"
         statusView = st
-        outer.addView(st)
+        if (!neo) outer.addView(st)
         val stats = TextView(this)
         stats.textSize = 11f
         stats.setTextColor(ACCENT)
@@ -3592,7 +3762,7 @@ class TimerService : AccessibilityService() {
         stats.setPadding(0, dp(2), 0, dp(2))
         statsView = stats
         stats.text = statsText()
-        outer.addView(stats)
+        if (!neo) outer.addView(stats)
 
         // ana düğmeler
         val mainRow = LinearLayout(this)
@@ -3762,6 +3932,11 @@ class TimerService : AccessibilityService() {
             rebuildUi()
         }
         tb.addView(themeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
+        val styleBtn = mkBtn("Arayüz: " + (if (neo) "Konsol" else "Klasik") + "  ⇄") {
+            prefs().edit().putInt("uiStyle", if (neo()) 0 else 1).apply()
+            rebuildUi()
+        }
+        tb.addView(styleBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
         tb.addView(mkBtn("Sayacı sıfırla") { resetStats() }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
         boxMaintBtns.addView(r2, rlp)
         val boxMacro = sect(tabMaint, "KAYITLI İŞLEMLER (kaydedersen bot bunları oynatır)")
@@ -4047,7 +4222,7 @@ class TimerService : AccessibilityService() {
         val markScroll = scrolled(tabMark)
         val maintScroll = scrolled(tabMaint)
         val toolsScroll = scrolled(tabTools)
-        val tabViews = listOf<View>(homeScroll, plansScroll, tabBoss, markScroll, maintScroll, toolsScroll)
+        val tabViews = listOf<View>(homeScroll, plansScroll, if (neo) scrolled(tabBoss) else tabBoss, markScroll, maintScroll, toolsScroll)
         val tabBtns = ArrayList<TextView>()
         val tabBar = LinearLayout(this)
         tabBar.orientation = LinearLayout.HORIZONTAL
@@ -4055,36 +4230,130 @@ class TimerService : AccessibilityService() {
             for (k in tabViews.indices) {
                 tabViews[k].visibility = if (k == i) View.VISIBLE else View.GONE
                 tabBtns[k].setTextColor(if (k == i) ACCENT else TEXT_DIM)
-                tabBtns[k].background = if (k == i) card(CARD_BG, 8, 0xFF6A3FA8.toInt()) else rounded(0x00000000, 8)
+                if (neo) {
+                    val par = tabBtns[k].parent as ViewGroup
+                    par.background = if (k == i) card(0xFF241536.toInt(), 12, 0xFF8E4DD6.toInt()) else rounded(0x00000000, 12)
+                    par.getChildAt(0).alpha = if (k == i) 1f else 0.5f
+                } else {
+                    tabBtns[k].background = if (k == i) card(CARD_BG, 8, 0xFF6A3FA8.toInt()) else rounded(0x00000000, 8)
+                }
             }
             prefs().edit().putInt("tab", i).apply()
             outer.post { placeBar() }
         }
-        for ((k, n) in tabNames.withIndex()) {
-            val t = TextView(this)
-            t.text = n
-            t.textSize = 12f
-            t.gravity = Gravity.CENTER
-            t.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            t.setOnClickListener { showTab(k) }
-            tabBtns.add(t)
-            tabBar.addView(t, LinearLayout.LayoutParams(0, dp(40), 1f))
+        if (!neo) {
+            for ((k, n) in tabNames.withIndex()) {
+                val t = TextView(this)
+                t.text = n
+                t.textSize = 12f
+                t.gravity = Gravity.CENTER
+                t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                t.setOnClickListener { showTab(k) }
+                tabBtns.add(t)
+                tabBar.addView(t, LinearLayout.LayoutParams(0, dp(40), 1f))
+            }
+            val tbl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            tbl.topMargin = dp(6)
+            outer.addView(tabBar, tbl)
+            outer.addView(homeScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
+            outer.addView(plansScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
+            outer.addView(tabBoss)
+            val tabH = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt())
+            outer.addView(markScroll, tabH)
+            outer.addView(maintScroll, LinearLayout.LayoutParams(tabH))
+            outer.addView(toolsScroll, LinearLayout.LayoutParams(tabH))
+        } else {
+            // KONSOL düzeni: üst çubuk (başlık, durum hapı), ana düğmeler, sayaç kutucukları, durum satırı, sol ray + içerik
+            val top = LinearLayout(this)
+            top.orientation = LinearLayout.HORIZONTAL
+            top.gravity = Gravity.CENTER_VERTICAL
+            val tt = TextView(this)
+            tt.text = "RICHINGEN"
+            tt.textSize = 17f
+            tt.letterSpacing = 0.12f
+            tt.tag = "serif"
+            tt.typeface = android.graphics.Typeface.SERIF
+            tt.setTextColor(0xFFC9ADEB.toInt())
+            top.addView(tt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val pill = TextView(this)
+            pill.textSize = 11f
+            pill.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            pill.setPadding(dp(10), dp(5), dp(10), dp(5))
+            neoPill = pill
+            top.addView(pill)
+            val back = mkBtn("⇄") {
+                prefs().edit().putInt("uiStyle", 0).apply()
+                rebuildUi()
+            }
+            back.textSize = 12f
+            top.addView(back, LinearLayout.LayoutParams(dp(36), dp(30)).also { it.leftMargin = dp(6) })
+            outer.addView(top)
+            mainRowLp.topMargin = dp(8)
+            outer.addView(mainRow, mainRowLp)
+            val tiles = LinearLayout(this)
+            tiles.orientation = LinearLayout.HORIZONTAL
+            neoVals.clear()
+            for (lab in listOf("BOSS", "GOLDEN", "RED", "ROTA", "ÖLÜM")) {
+                val tl = LinearLayout(this)
+                tl.orientation = LinearLayout.VERTICAL
+                tl.gravity = Gravity.CENTER
+                tl.background = card(CARD_BG, 10)
+                tl.setPadding(0, dp(6), 0, dp(6))
+                val v = TextView(this)
+                v.text = "0"
+                v.textSize = 17f
+                v.gravity = Gravity.CENTER
+                v.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                v.setTextColor(Color.WHITE)
+                neoVals.add(v)
+                tl.addView(v)
+                val l = TextView(this)
+                l.text = lab
+                l.textSize = 9f
+                l.letterSpacing = 0.08f
+                l.gravity = Gravity.CENTER
+                l.setTextColor(TEXT_DIM)
+                tl.addView(l)
+                tiles.addView(tl, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(if (neoVals.size > 1) 4 else 0) })
+            }
+            outer.addView(tiles, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(8) })
+            st.setPadding(dp(2), dp(8), dp(2), dp(4))
+            outer.addView(st)
+            val body = LinearLayout(this)
+            body.orientation = LinearLayout.HORIZONTAL
+            val rail = LinearLayout(this)
+            rail.orientation = LinearLayout.VERTICAL
+            rail.setPadding(0, 0, dp(8), 0)
+            val railIcons = listOf("gem", "list", "skull", "target", "gear", "pen")
+            for ((k, n) in tabNames.withIndex()) {
+                val item = LinearLayout(this)
+                item.orientation = LinearLayout.VERTICAL
+                item.gravity = Gravity.CENTER
+                item.setPadding(dp(2), dp(9), dp(2), dp(7))
+                item.addView(IconView(this, railIcons[k], Color.WHITE), LinearLayout.LayoutParams(dp(26), dp(26)))
+                val t = TextView(this)
+                t.text = n
+                t.textSize = 10f
+                t.gravity = Gravity.CENTER
+                t.maxLines = 1
+                t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                item.addView(t, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(3) })
+                item.setOnClickListener { showTab(k) }
+                tabBtns.add(t)
+                rail.addView(item, LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(4) })
+            }
+            body.addView(rail, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT))
+            val content = FrameLayout(this)
+            for (v in tabViews) content.addView(v, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            body.addView(content, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            outer.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.56f).toInt()))
         }
-        val tbl = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        tbl.topMargin = dp(6)
-        outer.addView(tabBar, tbl)
-        outer.addView(homeScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
-        outer.addView(plansScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt()))
-        outer.addView(tabBoss)
-        val tabH = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.46f).toInt())
-        outer.addView(markScroll, tabH)
-        outer.addView(maintScroll, LinearLayout.LayoutParams(tabH))
-        outer.addView(toolsScroll, LinearLayout.LayoutParams(tabH))
         buildHome(tabHome)
         buildPlans(tabPlans)
         if (!prefs().getBoolean("tabs6", false)) prefs().edit().putInt("tab", 0).putBoolean("tabs6", true).apply()
         showTab(prefs().getInt("tab", 0).coerceIn(0, 5))
-        outer.addView(mainRow, mainRowLp)
+        if (!neo) outer.addView(mainRow, mainRowLp)
+        updateStats()
         outer.alpha = uiAlpha() / 100f
         updateSizeBtns()
 
@@ -4631,7 +4900,10 @@ class TimerService : AccessibilityService() {
 
     private fun goldSnapshot(): List<Gold> = synchronized(lock) { ArrayList(golds) }
 
-    private fun goldMapName(): String = prefs().getString("goldMap", "") ?: ""
+    /** Red + Golden tek harita modu: ikisi de açıkken golden de red boss haritasında çalışır. */
+    private fun comboOn(): Boolean = on("comboOn") && on("goldOn") && on("redOn") && (prefs().getString("redMap", "") ?: "").isNotEmpty()
+
+    private fun goldMapName(): String = if (comboOn()) (prefs().getString("redMap", "") ?: "") else (prefs().getString("goldMap", "") ?: "")
 
     private fun goldTitle(g: Gold): String {
         val m = goldMapName()
@@ -4644,7 +4916,7 @@ class TimerService : AccessibilityService() {
      */
     private fun ensureGoldMap() {
         var gm = goldMapName()
-        val gw = cfgI("goldWire", 3)
+        val gw = if (comboOn()) cfgI("redWire", 1) else cfgI("goldWire", 3)
         closeMapIfOpen()
         var cur = readMapWireRetry()
         if (gm.isEmpty()) {
@@ -6849,8 +7121,8 @@ class TimerService : AccessibilityService() {
             return
         }
         val now = System.currentTimeMillis()
-        if (now - lastProtoAt < cfgI("protoCooldownMin", 15) * 60000L) {
-            ev("Golden protokolü az önce uygulandı, tekrar denenmiyor", true, 4)
+        if (now - lastProtoAt < 60000L) {
+            ev("Golden protokolü 1 dk içinde zaten uygulandı, tekrar denenmiyor", true, 4)
             return
         }
         ui { showProtoWarning(reason, false) }
@@ -7085,7 +7357,7 @@ class TimerService : AccessibilityService() {
         l.add(ScItem("sw", "Kronometre", "stopwatch") { toggleStopwatch() })
         val ic = mapOf(
             "potOn" to "pot", "recycleOn" to "recycle", "farmOn" to "skull", "impOn" to "imp", "angelOn" to "angel", "reviveOn" to "heart",
-            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target", "popupOn" to "popup"
+            "buffOn" to "buff", "randomOn" to "dice", "goldOn" to "star", "redOn" to "gem", "routeOn" to "route", "idleFarmOn" to "moon", "macroTpOn" to "pin", "protoOn" to "shield", "ownerOn" to "target", "popupOn" to "popup", "comboOn" to "star", "buffSoloOff" to "buff"
         )
         for (t in TOGGLES) l.add(ScItem("t:" + t.first, t.second, ic[t.first] ?: "dice") {
             prefs().edit().putBoolean("cfg_" + t.first, !on(t.first)).apply()
