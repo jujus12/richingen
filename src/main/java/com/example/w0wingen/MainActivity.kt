@@ -276,7 +276,7 @@ class MainActivity : Activity() {
         lookHint.setTextColor(DIM)
         look.addView(lookHint)
         val styleRow = LinearLayout(this)
-        styleRow.orientation = LinearLayout.HORIZONTAL
+        styleRow.orientation = LinearLayout.VERTICAL
         val styleBtns = ArrayList<Button>()
         fun paintStyle() {
             val cur = prefs().getInt("uiStyle", 0)
@@ -285,16 +285,23 @@ class MainActivity : Activity() {
                 b.setTextColor(if (i == cur) 0xFF04202D.toInt() else Color.WHITE)
             }
         }
-        for ((i, n) in listOf("Klasik", "Konsol", "Akış", "Vitrin", "Zirve").withIndex()) {
-            val b = Button(this)
-            b.text = n
-            b.isAllCaps = false
-            b.setOnClickListener {
-                prefs().edit().putInt("uiStyle", i).apply()
-                paintStyle()
+        val styleNames = listOf("Klasik", "Konsol", "Akış", "Vitrin", "Zirve", "Kusursuz")
+        for (rowIdx in 0 until 2) {
+            val rl = LinearLayout(this)
+            rl.orientation = LinearLayout.HORIZONTAL
+            for (c in 0 until 3) {
+                val i = rowIdx * 3 + c
+                val b = Button(this)
+                b.text = styleNames[i]
+                b.isAllCaps = false
+                b.setOnClickListener {
+                    prefs().edit().putInt("uiStyle", i).apply()
+                    paintStyle()
+                }
+                styleBtns.add(b)
+                rl.addView(b, LinearLayout.LayoutParams(0, dp(44), 1f).also { it.leftMargin = dp(if (c > 0) 6 else 0) })
             }
-            styleBtns.add(b)
-            styleRow.addView(b, LinearLayout.LayoutParams(0, dp(44), 1f).also { it.leftMargin = dp(if (i > 0) 6 else 0) })
+            styleRow.addView(rl, lp(dp(if (rowIdx > 0) 6 else 0)))
         }
         paintStyle()
         look.addView(styleRow, lp(dp(8)))
@@ -315,6 +322,59 @@ class MainActivity : Activity() {
             }
             crash.addView(clr, lp(dp(8)))
         }
+
+        val lg = card(col, "Günlük (kayıt listesi)")
+        val lgHint = TextView(this)
+        lgHint.text = "Botun olayları, durum mesajları ve hataları; en yeni en üstte. Bir sorun olunca buradaki satırları bana gönder."
+        lgHint.textSize = 11f
+        lgHint.setTextColor(DIM)
+        lg.addView(lgHint)
+        val logTxt = TextView(this)
+        logTxt.typeface = Typeface.MONOSPACE
+        logTxt.textSize = 10.5f
+        logTxt.setTextColor(Color.WHITE)
+        logTxt.setTextIsSelectable(true)
+        fun loadLog(): String {
+            val f = java.io.File(filesDir, "richingen.log")
+            val lines = try { if (f.exists()) f.readLines() else emptyList() } catch (e: Exception) { emptyList() }
+            val tail = lines.takeLast(250).reversed()
+            val t = if (tail.isEmpty()) "Kayıt yok." else tail.joinToString("\n")
+            logTxt.text = t
+            return t
+        }
+        loadLog()
+        val logSv = ScrollView(this)
+        logSv.addView(logTxt)
+        logSv.setOnTouchListener { v, _ ->
+            v.parent.requestDisallowInterceptTouchEvent(true)
+            false
+        }
+        logSv.background = rounded(INPUT, 10)
+        logSv.setPadding(dp(8), dp(8), dp(8), dp(8))
+        lg.addView(logSv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(340)).also { it.topMargin = dp(8) })
+        val logRow = LinearLayout(this)
+        logRow.orientation = LinearLayout.HORIZONTAL
+        val b1 = button("Yenile", false)
+        b1.setOnClickListener { loadLog() }
+        logRow.addView(b1, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val b2 = button("Paylaş", false)
+        b2.setOnClickListener {
+            val it2 = Intent(Intent.ACTION_SEND)
+            it2.type = "text/plain"
+            it2.putExtra(Intent.EXTRA_TEXT, loadLog().take(60000))
+            startActivity(Intent.createChooser(it2, "Günlüğü paylaş"))
+        }
+        logRow.addView(b2, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(6) })
+        val b3 = button("Temizle", false)
+        b3.setOnClickListener {
+            try {
+                java.io.File(filesDir, "richingen.log").delete()
+            } catch (e: Exception) {
+            }
+            loadLog()
+        }
+        logRow.addView(b3, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(6) })
+        lg.addView(logRow, lp(dp(8)))
 
         val nc = card(col, "ntfy komutları")
         val ncHint = TextView(this)

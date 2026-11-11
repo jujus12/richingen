@@ -245,7 +245,7 @@ class TimerService : AccessibilityService() {
 
         private val PROFILE_SKIP = setOf(
             "tabs5", "tabs6", "ntfyCmds", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
-            "bfx", "bfy", "bfSize", "bfOpen", "uiStyle", "style3", "style4", "floats", "lastCrash", "crashPushed", "style5", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
+            "bfx", "bfy", "bfSize", "bfOpen", "uiStyle", "style3", "style4", "floats", "lastCrash", "crashPushed", "style5", "style6", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
         )
 
         /** Plan = tüm ayarlar: cfg_*, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota listeleri. Pencere konumu, tema, süre kayıtları ve istatistikler hariç. */
@@ -533,6 +533,7 @@ class TimerService : AccessibilityService() {
         try {
             val t0 = java.text.SimpleDateFormat("dd.MM HH:mm:ss", java.util.Locale.US).format(java.util.Date())
             prefs().edit().putString("lastCrash", t0 + " · " + tag + "\n" + t.stackTraceToString().take(2500)).putBoolean("crashPushed", false).commit()
+            logLine("✖ " + tag + ": " + t.stackTraceToString().take(600))
         } catch (e: Exception) {
         }
     }
@@ -636,8 +637,35 @@ class TimerService : AccessibilityService() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+    private val logLock = Any()
+    @Volatile private var lastSayKey = ""
+    @Volatile private var lastSayAt = 0L
+
+    /** Kalıcı günlük dosyası (uygulamadaki Günlük kartında görünür): olaylar, durum mesajları, hatalar. */
+    private fun logLine(msg: String) {
+        try {
+            val t = java.text.SimpleDateFormat("dd.MM HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+            val f = java.io.File(filesDir, "richingen.log")
+            synchronized(logLock) {
+                f.appendText(t + " " + msg.replace("\n", " | ") + "\n")
+                if (f.length() > 300000L) {
+                    val txt = f.readText()
+                    f.writeText(txt.takeLast(200000).substringAfter('\n'))
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
     private fun say(msg: String) {
         lastSay = msg
+        val now = System.currentTimeMillis()
+        val k = msg.take(28)
+        if (k != lastSayKey || now - lastSayAt > 6000L) {
+            lastSayKey = k
+            lastSayAt = now
+            logLine("· " + msg)
+        }
         ui { statusView?.text = msg }
     }
 
@@ -3132,12 +3160,14 @@ class TimerService : AccessibilityService() {
 
     @Volatile private var curStyle = 0
     private val scaledViews = java.util.WeakHashMap<View, Boolean>()
+    private val uniformViews = java.util.WeakHashMap<View, Boolean>()
 
     private fun panelW(): Int {
         val sz = prefs().getInt("uiSize", 1).coerceIn(0, 2)
         if (prefs().getInt("uiStyle", 0) == 2) return minOf(dp(intArrayOf(340, 390, 440)[sz]), (screenW * 0.62f).toInt())
         if (prefs().getInt("uiStyle", 0) == 3) return minOf(dp(intArrayOf(350, 400, 450)[sz]), (screenW * 0.62f).toInt())
         if (prefs().getInt("uiStyle", 0) == 4) return minOf(dp(intArrayOf(370, 420, 470)[sz]), (screenW * 0.64f).toInt())
+        if (prefs().getInt("uiStyle", 0) == 5) return minOf(dp(intArrayOf(380, 430, 480)[sz]), (screenW * 0.64f).toInt())
         if (neo()) return minOf(dp(intArrayOf(400, 470, 540)[sz]), (screenW * 0.7f).toInt())
         return dp(intArrayOf(200, 250, 310)[sz])
     }
@@ -3432,6 +3462,30 @@ class TimerService : AccessibilityService() {
             ))
         }
 
+        fun mapMacroRow(name: String) {
+            val k = "tp_" + name
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            val has = macroHas(k)
+            val tv = TextView(this)
+            tv.text = (if (has) "●  " else "○  ") + name
+            tv.textSize = 12f
+            tv.setTextColor(if (has) Color.WHITE else TEXT_DIM)
+            row.addView(tv, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val acts = listOf<Pair<String, () -> Unit>>(
+                "●" to { startRecording(k) },
+                "▶" to { if (macroHas(k)) runManual { playMacro(k) } else say("Önce kaydet: " + name) },
+                "✕" to { prefs().edit().remove("macro_" + k).apply(); refreshHome() }
+            )
+            for (a in acts) {
+                val b = mkBtn(a.first) { a.second() }
+                b.textSize = 12f
+                row.addView(b, LinearLayout.LayoutParams(dp(40), dp(34)).also { it.leftMargin = dp(4) })
+            }
+            cur.addView(row, lpTop())
+        }
+
         fun settingsFor(key: String) {
             val pinned = floatKeys().contains("t:" + key)
             buttons(listOf<Pair<String, () -> Unit>>("◈  Yüzen düğme: " + (if (pinned) "Kaldır" else "Ekrana ekle") to { toggleFloatPin("t:" + key); refreshHome() }))
@@ -3530,7 +3584,10 @@ class TimerService : AccessibilityService() {
                     hint("Açıkken sol üstteki takım kutusunda yalnızca senin satırın varsa buff kontrolü ve buff gezisi yapılmaz; 2 ya da daha çok oyuncu satırı varsa buff sistemi normal çalışır. Okuma alanı: Ayar > Okuma bölgeleri > teamTL / teamBR.")
                     buttons(listOf<Pair<String, () -> Unit>>("Say (test)" to { runManual { teamTest() } }, "Ayar (işaretle)" to { toggleMenu() }))
                 }
-                "macroTpOn" -> hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. Kayıtlar Bakım sekmesinde.")
+                "macroTpOn" -> {
+                    hint("Açıkken bot kayıtlı haritalara kayıtla gider; kayıt yoksa chat'ten. ● kaydet · ▶ dene · ✕ sil. (● dolu = kayıt var)")
+                    for (m in maps()) mapMacroRow(m.name)
+                }
                 "angelOn" -> {
                     hint("Angel simgesi alt çubukta yoksa Bakım > Kayıtlı işlemler > Angel al kaydı oynatılır. Angel noktasını yuvanın tam ortasına işaretle.")
                     step("Simge eşiği (‰ parlak piksel)", "angelThr", 30, 1, 500) { 5 }
@@ -3933,6 +3990,11 @@ class TimerService : AccessibilityService() {
         if (curStyle >= 2 && v is TextView && scaledViews.put(v, true) == null) {
             v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, v.textSize * (if (curStyle == 2) 1.12f else 1.08f))
         }
+        if (curStyle == 5 && v is Button && uniformViews.put(v, true) == null) {
+            v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f)
+            val lp = v.layoutParams
+            if (lp != null && lp.height > 0 && lp.height < dp(46)) lp.height = dp(40)
+        }
         if (v is TextView && v.tag != "serif") {
             val bold = v.typeface?.isBold == true
             v.typeface = android.graphics.Typeface.create("sans-serif-medium", if (bold) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
@@ -3970,27 +4032,16 @@ class TimerService : AccessibilityService() {
                 wm.updateViewLayout(sv2, sl)
             } catch (e: Exception) {
             }
-            val dl = dockScLp
-            val dv = dockSc
-            if (dl != null && dv != null) {
-                val below = sl.y > hy
-                dl.x = sl.x
-                dl.y = if (below) (if (sl.y + sh2 + dp(4) + sh2 <= screenH) sl.y + sh2 + dp(4) else maxOf(0, hy - sh2 - dp(4))) else maxOf(0, sl.y - sh2 - dp(4))
-                dockSaved("sc", dl)
+            val below = sl.y > hy
+            val vl = dockSvLp
+            val vv = dockSv
+            if (vl != null && vv != null) {
+                vl.x = sl.x
+                vl.y = if (below) minOf(sl.y + sh2 + dp(4), maxOf(0, screenH - sh2)) else maxOf(0, sl.y - sh2 - dp(4))
+                dockSaved("sv", vl)
                 try {
-                    wm.updateViewLayout(dv, dl)
+                    wm.updateViewLayout(vv, vl)
                 } catch (e: Exception) {
-                }
-                val vl = dockSvLp
-                val vv = dockSv
-                if (vl != null && vv != null) {
-                    vl.x = dl.x
-                    vl.y = if (below) minOf(dl.y + sh2 + dp(4), maxOf(0, screenH - sh2)) else maxOf(0, dl.y - sh2 - dp(4))
-                    dockSaved("sv", vl)
-                    try {
-                        wm.updateViewLayout(vv, vl)
-                    } catch (e: Exception) {
-                    }
                 }
             }
         }
@@ -4000,7 +4051,7 @@ class TimerService : AccessibilityService() {
             var px = if (onRight) hx - pw else hx + hw
             px = px.coerceIn(0, maxOf(0, screenW - pw))
             val ph = if (p.visibility == View.GONE) 0 else p.height
-            val py = hy.coerceIn(0, maxOf(0, screenH - ph))
+            val py = if (prefs().getInt("uiStyle", 0) == 5 && ph > 0) maxOf(0, (screenH - ph) / 2) else hy.coerceIn(0, maxOf(0, screenH - ph))
             pl.x = px
             pl.y = py
             try {
@@ -4018,12 +4069,12 @@ class TimerService : AccessibilityService() {
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
         outer.background = framed(PANEL_BG, 18)
-        if (!prefs().getBoolean("style5", false)) prefs().edit().putInt("uiStyle", 4).putBoolean("style5", true).putBoolean("style4", true).putBoolean("style3", true).apply()
+        if (!prefs().getBoolean("style6", false)) prefs().edit().putInt("uiStyle", 5).putBoolean("style6", true).putBoolean("style5", true).putBoolean("style4", true).putBoolean("style3", true).apply()
         val style = prefs().getInt("uiStyle", 0)
         curStyle = style
         val neo = style != 0
         val flow = style == 2
-        if (neo) outer.setPadding(dp(12), dp(14), dp(12), dp(12)) else outer.setPadding(dp(16), dp(20), dp(16), dp(18))
+        if (style == 5) outer.setPadding(dp(16), dp(16), dp(16), dp(16)) else if (neo) outer.setPadding(dp(12), dp(14), dp(12), dp(12)) else outer.setPadding(dp(16), dp(20), dp(16), dp(18))
 
         // başlık
         val head = LinearLayout(this)
@@ -4102,7 +4153,7 @@ class TimerService : AccessibilityService() {
             val body = LinearLayout(this)
             body.orientation = LinearLayout.VERTICAL
             val sk = "sect_" + title.take(24)
-            var open = prefs().getBoolean(sk, !title.startsWith("HARİTA IŞINLANMA"))
+            var open = prefs().getBoolean(sk, true)
             fun ap() {
                 lab.text = (if (open) "▾  " else "▸  ") + title
                 body.visibility = if (open) View.VISIBLE else View.GONE
@@ -4225,17 +4276,18 @@ class TimerService : AccessibilityService() {
             rebuildUi()
         }
         tb.addView(themeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
-        val styleBtn = mkBtn("Arayüz: " + arrayOf("Klasik", "Konsol", "Akış", "Vitrin", "Zirve")[style] + "  ⇄") {
-            prefs().edit().putInt("uiStyle", (prefs().getInt("uiStyle", 0) + 1) % 5).apply()
+        val styleBtn = mkBtn("Arayüz: " + arrayOf("Klasik", "Konsol", "Akış", "Vitrin", "Zirve", "Kusursuz")[style] + "  ⇄") {
+            prefs().edit().putInt("uiStyle", (prefs().getInt("uiStyle", 0) + 1) % 6).apply()
             rebuildUi()
         }
         tb.addView(styleBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
-        tb.addView(mkBtn("Düğme konumlarını sıfırla (Kaydet/Durdur/Kısayol)") {
+        tb.addView(mkBtn("Düğme konumlarını sıfırla (Kaydet/Durdur)") {
             val e = prefs().edit()
             for (k in prefs().all.keys) if (k.startsWith("dk_")) e.remove(k)
             e.apply()
             placeBar()
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
+        tb.addView(mkBtn("Kısayollar penceresi") { toggleShortcuts() }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
         tb.addView(mkBtn("Yüzen düğmeleri kaldır") {
             prefs().edit().putString("floats", "").apply()
             refreshFloats()
@@ -4722,6 +4774,104 @@ class TimerService : AccessibilityService() {
             flowPage = page
             flowTitle = pt
             outer.addView(stack, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.66f).toInt()).also { it.topMargin = dp(8) })
+        } else if (style == 5) {
+            // KUSURSUZ düzen: 16 dp kenar, 8 dp ızgara, eşit genişlikli bloklar, sabit yükseklikli satırlar, ekranı dikey dolduran yan panel
+            val g8 = dp(8)
+            val top = LinearLayout(this)
+            top.orientation = LinearLayout.HORIZONTAL
+            top.gravity = Gravity.CENTER_VERTICAL
+            val av = FrameLayout(this)
+            av.background = GradientDrawable(GradientDrawable.Orientation.TL_BR, intArrayOf(0xFF5B2FA0.toInt(), 0xFF1B1230.toInt())).also {
+                it.shape = GradientDrawable.OVAL
+                it.setStroke(dp(2), 0xFFB48AE0.toInt())
+            }
+            av.addView(IconView(this, "gem", Color.WHITE), FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
+            top.addView(av, LinearLayout.LayoutParams(dp(40), dp(40)))
+            val tt = TextView(this)
+            tt.text = "RICHINGEN"
+            tt.textSize = 18f
+            tt.letterSpacing = 0.14f
+            tt.tag = "serif"
+            tt.typeface = android.graphics.Typeface.SERIF
+            tt.setTextColor(0xFFE3D2F7.toInt())
+            top.addView(tt, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).also { it.leftMargin = dp(12) })
+            val pill = TextView(this)
+            pill.textSize = 11f
+            pill.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            pill.gravity = Gravity.CENTER
+            pill.setPadding(dp(12), 0, dp(12), 0)
+            neoPill = pill
+            top.addView(pill, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(32)))
+            val back = mkBtn("⇄") {
+                prefs().edit().putInt("uiStyle", 0).apply()
+                rebuildUi()
+            }
+            top.addView(back, LinearLayout.LayoutParams(dp(40), dp(32)).also { it.leftMargin = g8 })
+            outer.addView(top, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48)))
+            for (i in 0 until mainRow.childCount) {
+                val c = mainRow.getChildAt(i)
+                c.layoutParams.height = dp(48)
+                (c.layoutParams as LinearLayout.LayoutParams).leftMargin = if (i > 0) g8 else 0
+            }
+            mainRowLp.topMargin = g8 * 2
+            outer.addView(mainRow, mainRowLp)
+            val tiles = LinearLayout(this)
+            tiles.orientation = LinearLayout.HORIZONTAL
+            neoVals.clear()
+            for (lab in listOf("BOSS", "GOLDEN", "RED", "ROTA", "ÖLÜM")) {
+                val tl = LinearLayout(this)
+                tl.orientation = LinearLayout.VERTICAL
+                tl.gravity = Gravity.CENTER
+                tl.background = card(CARD_BG, 12)
+                val v = TextView(this)
+                v.text = "0"
+                v.textSize = 16f
+                v.gravity = Gravity.CENTER
+                v.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                v.setTextColor(Color.WHITE)
+                neoVals.add(v)
+                tl.addView(v)
+                val l = TextView(this)
+                l.text = lab
+                l.textSize = 9f
+                l.letterSpacing = 0.08f
+                l.gravity = Gravity.CENTER
+                l.setTextColor(TEXT_DIM)
+                tl.addView(l)
+                tiles.addView(tl, LinearLayout.LayoutParams(0, dp(52), 1f).also { it.leftMargin = if (neoVals.size > 1) g8 else 0 })
+            }
+            outer.addView(tiles, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(52)).also { it.topMargin = g8 })
+            st.minLines = 2
+            st.maxLines = 2
+            st.setPadding(dp(2), 0, dp(2), 0)
+            st.gravity = Gravity.CENTER_VERTICAL
+            outer.addView(st, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(40)).also { it.topMargin = g8 })
+            val content = FrameLayout(this)
+            for (v in tabViews) content.addView(v, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            outer.addView(content, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            val nav = LinearLayout(this)
+            nav.orientation = LinearLayout.HORIZONTAL
+            nav.background = card(0xFF151021.toInt(), 14, 0xFF3A2A55.toInt())
+            nav.setPadding(dp(4), dp(4), dp(4), dp(4))
+            val navIcons = listOf("gem", "list", "skull", "target", "gear", "pen")
+            val navNames = listOf("Seçenekler", "Planlar", "Bosslar", "İşaret", "Bakım", "Araç")
+            for (k in navNames.indices) {
+                val item = LinearLayout(this)
+                item.orientation = LinearLayout.VERTICAL
+                item.gravity = Gravity.CENTER
+                item.addView(IconView(this, navIcons[k], Color.WHITE), LinearLayout.LayoutParams(dp(22), dp(22)))
+                val t = TextView(this)
+                t.text = navNames[k]
+                t.textSize = 9f
+                t.maxLines = 1
+                t.gravity = Gravity.CENTER
+                t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                item.addView(t, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(3) })
+                item.setOnClickListener { showTab(k) }
+                tabBtns.add(t)
+                nav.addView(item, LinearLayout.LayoutParams(0, dp(52), 1f))
+            }
+            outer.addView(nav, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = g8 })
         } else if (style == 4) {
             // ZİRVE düzeni: yuvarlak simgeli başlık, geniş eylem düğmeleri, kaydırılabilir hap sekmeler, ferah içerik
             val top = LinearLayout(this)
@@ -4960,6 +5110,7 @@ class TimerService : AccessibilityService() {
         applyFont(outer)
         outer.visibility = View.GONE
         val pl = overlayParams(panelW())
+        if (style == 5) pl.height = (screenH * 0.94f).toInt()
         wm.addView(outer, pl)
         panel = outer
         panelLp = pl
@@ -5029,22 +5180,6 @@ class TimerService : AccessibilityService() {
         stopWin = sw
         stopLp = slp2
         applyFont(sw)
-
-        // Kısayollar için tutamacın dışında duran düğme (Durdur gibi)
-        val kb = TextView(this)
-        kb.text = "☰ Kısayol"
-        kb.textSize = 12f
-        kb.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        kb.gravity = Gravity.CENTER
-        kb.setTextColor(Color.WHITE)
-        kb.background = card(onFill(), 12, ACCENT)
-        kb.setPadding(dp(8), dp(6), dp(8), dp(6))
-        val klp = overlayParams(dp(82))
-        wm.addView(kb, klp)
-        makeDraggable(kb, klp, "dk_sc") { toggleShortcuts() }
-        dockSc = kb
-        dockScLp = klp
-        applyFont(kb)
 
         // Kaydet: panel kapalıyken de tek dokunuşla boss kaydı
         val kv = TextView(this)
@@ -8306,6 +8441,7 @@ class TimerService : AccessibilityService() {
             evLog.addLast(t + " " + msg)
             while (evLog.size > 80) evLog.removeFirst()
         }
+        logLine("◆ " + msg)
         if (push) push(msg, prio)
     }
 
