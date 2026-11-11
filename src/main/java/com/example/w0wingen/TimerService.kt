@@ -2183,6 +2183,10 @@ class TimerService : AccessibilityService() {
     private fun doBuff(minA: Int, minD: Int) {
         setAuto(false)
         farming = false
+        // Buff noktasına gidilince harita değişir: golden/red/rota haritasına dönüşte yeniden gidilsin
+        goldHere = false
+        redHere = false
+        routeAt = false
         closeMapIfOpen()
         val bw = cfgI("buffWire", 3)
         val cur = readMapWireRetry()
@@ -7674,7 +7678,7 @@ class TimerService : AccessibilityService() {
                     closeProto()
                     val idle = protoIdleMode
                     protoIdleMode = false
-                    Thread { runGoldenProtocol(test, idle) }.start()
+                    runGoldenProtocol(test, idle)
                 } else {
                     label()
                     main.postDelayed(this, 1000)
@@ -7698,13 +7702,18 @@ class TimerService : AccessibilityService() {
 
     private fun runGoldenProtocol(test: Boolean = false, restart: Boolean = false) {
         if ((autoRunning || busy) && restart) {
+            // Çalışan otomasyonu arka planda durdur, bitince protokolü ana iş parçacığında uygula (arayüze yalnızca oradan dokunulur)
             ev("Golden protokolü: çalışan otomasyon durduruluyor", true, 3)
             stopJob()
-            var w = 0
-            while ((autoRunning || busy) && w < 100) {
-                Thread.sleep(100)
-                w++
-            }
+            Thread {
+                var w = 0
+                while ((autoRunning || busy) && w < 100) {
+                    Thread.sleep(100)
+                    w++
+                }
+                ui { runGoldenProtocol(test, false) }
+            }.start()
+            return
         }
         if (autoRunning || busy) {
             ev("Golden protokolü: otomasyon zaten çalışıyor", true, 3)
