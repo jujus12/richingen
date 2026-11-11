@@ -2187,10 +2187,6 @@ class TimerService : AccessibilityService() {
     private fun doBuff(minA: Int, minD: Int) {
         setAuto(false)
         farming = false
-        // Buff noktasına gidilince harita değişir: golden/red/rota haritasına dönüşte yeniden gidilsin
-        goldHere = false
-        redHere = false
-        routeAt = false
         closeMapIfOpen()
         val bw = cfgI("buffWire", 3)
         val cur = readMapWireRetry()
