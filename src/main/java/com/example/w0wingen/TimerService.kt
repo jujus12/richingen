@@ -245,11 +245,11 @@ class TimerService : AccessibilityService() {
 
         private val PROFILE_SKIP = setOf(
             "tabs5", "tabs6", "ntfyCmds", "cfg_ntfy", "cfg_maps", "profile_names", "profile_active", "theme", "themeGothic", "tab", "uiSize", "uiAlpha",
-            "bfx", "bfy", "bfSize", "bfOpen", "uiStyle", "style3", "lastCrash", "crashPushed", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
+            "bfx", "bfy", "bfSize", "bfOpen", "uiStyle", "style3", "style4", "floats", "lastCrash", "crashPushed", "hx", "hy", "swx", "swy", "scx", "scy", "scOpen", "entries", "stamps", "shortcuts", "superbAdded", "kanturuAdded", "aidaIcarusAdded"
         )
 
         /** Plan = tüm ayarlar: cfg_*, işaret noktaları, kayıtlı işlemler, pencere kayıtları, rota listeleri. Pencere konumu, tema, süre kayıtları ve istatistikler hariç. */
-        private fun profKey(k: String) = !k.startsWith("profile_") && !k.startsWith("stat_") && !k.startsWith("sect_") && !k.startsWith("mg_") && !k.startsWith("card_open_") && !PROFILE_SKIP.contains(k)
+        private fun profKey(k: String) = !k.startsWith("profile_") && !k.startsWith("stat_") && !k.startsWith("sect_") && !k.startsWith("mg_") && !k.startsWith("card_open_") && !k.startsWith("dk_") && !k.startsWith("fl_") && !PROFILE_SKIP.contains(k)
 
         fun profileNames(p: android.content.SharedPreferences): List<String> =
             p.getString("profile_names", "")!!.split("\n").filter { it.isNotBlank() }
@@ -447,6 +447,7 @@ class TimerService : AccessibilityService() {
             buildUiSafe()
             rebuildList()
             applyPanel()
+            refreshFloats()
         }
     }
 
@@ -583,6 +584,7 @@ class TimerService : AccessibilityService() {
         registerProfileSync()
         buildUiSafe()
         rebuildList()
+        refreshFloats()
         main.postDelayed(ticker, 1000)
         startPoller()
         startWatchdog()
@@ -601,6 +603,7 @@ class TimerService : AccessibilityService() {
         closeStopwatch()
         closeShortcuts()
         closeBossFloat()
+        clearFloatWindows()
         closePick()
         closeProto()
         prefListener?.let { prefs().unregisterOnSharedPreferenceChangeListener(it) }
@@ -1592,7 +1595,8 @@ class TimerService : AccessibilityService() {
             try {
                 if (through) {
                     val m = dp(24)
-                    val cands = listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp), Pair(dockSc, dockScLp), Pair(dockSv, dockSvLp), Pair(bfWin, bfLp))
+                    val cands = ArrayList<Pair<View?, WindowManager.LayoutParams?>>(listOf(Pair(panel, panelLp), Pair(handle, handleLp), Pair(swWin, swLp), Pair(scWin, scLp), Pair(stopWin, stopLp), Pair(dockSc, dockScLp), Pair(dockSv, dockSvLp), Pair(bfWin, bfLp)))
+                    for (f in floats.values) cands.add(Pair(f.view, f.lp))
                     for ((v, lp) in cands) {
                         if (v == null || lp == null || v.visibility != View.VISIBLE) continue
                         val w = if (v.width > 0) v.width else lp.width
@@ -2544,7 +2548,8 @@ class TimerService : AccessibilityService() {
         farming = false
         fails = 0
         lastPot = System.currentTimeMillis()
-        lastRecycle = 0L
+        lastRecycle = System.currentTimeMillis()
+        fightsSinceRec = 0
         say("Otomasyon açık")
         startedAt = System.currentTimeMillis()
         deathCnt.clear()
@@ -3076,6 +3081,7 @@ class TimerService : AccessibilityService() {
 
     private fun updateUi() {
         updatePill()
+        if (floats.isNotEmpty()) refreshFloats()
         val sb = saveBtn
         if (sb != null) {
             if (busy && !autoRunning) {
@@ -3122,6 +3128,7 @@ class TimerService : AccessibilityService() {
     private fun panelW(): Int {
         val sz = prefs().getInt("uiSize", 1).coerceIn(0, 2)
         if (prefs().getInt("uiStyle", 0) == 2) return minOf(dp(intArrayOf(340, 390, 440)[sz]), (screenW * 0.62f).toInt())
+        if (prefs().getInt("uiStyle", 0) == 3) return minOf(dp(intArrayOf(350, 400, 450)[sz]), (screenW * 0.62f).toInt())
         if (neo()) return minOf(dp(intArrayOf(400, 470, 540)[sz]), (screenW * 0.7f).toInt())
         return dp(intArrayOf(200, 250, 310)[sz])
     }
@@ -3320,6 +3327,12 @@ class TimerService : AccessibilityService() {
                 } else toast("Önce planı yükle, sonra güncelle")
             }
             r.addView(up, LinearLayout.LayoutParams(0, dp(38), 1f).also { it.leftMargin = dp(6) })
+            val pinned = floatKeys().contains("p:" + n)
+            val pn = mkBtn(if (pinned) "◈ ✓" else "◈") {
+                toggleFloatPin("p:" + n)
+                refreshHome()
+            }
+            r.addView(pn, LinearLayout.LayoutParams(dp(52), dp(38)).also { it.leftMargin = dp(6) })
             cd.addView(r, LinearLayout.LayoutParams(full, wrap).also { it.topMargin = dp(8) })
             box.addView(cd, LinearLayout.LayoutParams(full, wrap).also { it.topMargin = dp(8) })
         }
@@ -3411,6 +3424,8 @@ class TimerService : AccessibilityService() {
         }
 
         fun settingsFor(key: String) {
+            val pinned = floatKeys().contains("t:" + key)
+            buttons(listOf<Pair<String, () -> Unit>>("◈  Yüzen düğme: " + (if (pinned) "Kaldır" else "Ekrana ekle") to { toggleFloatPin("t:" + key); refreshHome() }))
             when (key) {
                 "potOn" -> {
                     step("Pot eşiği", "potMin", 20, 0, 999) { 5 }
@@ -3667,6 +3682,7 @@ class TimerService : AccessibilityService() {
 
     private fun updateToggles() {
         refreshHome()
+        refreshFloats()
         if (scWin != null) scRender()
         for (t in TOGGLES) {
             val btn = toggleBtns[t.first] ?: continue
@@ -3690,6 +3706,153 @@ class TimerService : AccessibilityService() {
         handle?.text = (if (panelOpen) "▸" else "◂") + "\n" + mode
         placeBar()
         if (panelOpen) panel?.post { placeBar() }
+    }
+
+    /** Düğme kendi kayıtlı konumundaysa (sürüklenmişse) varsayılan konumu ezer. */
+    private fun dockSaved(key: String, lp: WindowManager.LayoutParams) {
+        val sx = prefs().getInt("dk_" + key + "_x", Int.MIN_VALUE)
+        if (sx == Int.MIN_VALUE) return
+        lp.x = sx.coerceIn(0, maxOf(0, screenW - dp(82)))
+        lp.y = prefs().getInt("dk_" + key + "_y", lp.y).coerceIn(0, maxOf(0, screenH - dp(34)))
+    }
+
+    /** Sürüklenebilen düğme: kısa dokunuş eylemi çalıştırır, sürükleme konumu kaydeder. */
+    private fun makeDraggable(v: View, lp: WindowManager.LayoutParams, posKey: String?, action: () -> Unit) {
+        var dx = 0f
+        var dy = 0f
+        var sx = 0
+        var sy = 0
+        var moved = false
+        v.setOnTouchListener { _, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    dx = ev.rawX
+                    dy = ev.rawY
+                    sx = lp.x
+                    sy = lp.y
+                    moved = false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val ddx = ev.rawX - dx
+                    val ddy = ev.rawY - dy
+                    if (!moved && Math.abs(ddx) + Math.abs(ddy) > dp(10)) moved = true
+                    if (moved) {
+                        lp.x = (sx + ddx).toInt().coerceIn(0, maxOf(0, screenW - maxOf(v.width, 1)))
+                        lp.y = (sy + ddy).toInt().coerceIn(0, maxOf(0, screenH - maxOf(v.height, 1)))
+                        try {
+                            wm.updateViewLayout(v, lp)
+                        } catch (e: Exception) {
+                        }
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (moved) {
+                        if (posKey != null) prefs().edit().putInt(posKey + "_x", lp.x).putInt(posKey + "_y", lp.y).apply()
+                    } else action()
+                }
+            }
+            true
+        }
+    }
+
+    // ------------------------------------------------------------------ yüzen düğmeler (seçenek / plan)
+
+    private class FloatWin(val key: String, val view: LinearLayout, val lp: WindowManager.LayoutParams, val label: TextView)
+    private val floats = LinkedHashMap<String, FloatWin>()
+
+    private fun floatKeys(): List<String> = (prefs().getString("floats", "") ?: "").split("\n").filter { it.isNotBlank() }
+
+    private fun toggleFloatPin(key: String) {
+        val l = floatKeys().toMutableList()
+        if (l.contains(key)) l.remove(key) else l.add(key)
+        prefs().edit().putString("floats", l.joinToString("\n")).apply()
+        refreshFloats()
+    }
+
+    private fun startPlanFloat(name: String) {
+        if (autoRunning || busy) {
+            stopJob()
+            Thread {
+                var w = 0
+                while ((autoRunning || busy) && w < 80) {
+                    Thread.sleep(100)
+                    w++
+                }
+                ui { startPlan(name) }
+            }.start()
+        } else startPlan(name)
+    }
+
+    private fun floatLabel(key: String): String =
+        if (key.startsWith("t:")) (TOGGLES.firstOrNull { it.first == key.substring(2) }?.second ?: key.substring(2)) else "▶ " + key.substring(2)
+
+    /** Seçilen seçenekleri ve planları ayrı ayrı sürüklenebilen yüzen düğmeler olarak ekrana koyar; durumu renkle gösterir. */
+    private fun refreshFloats() {
+        ui {
+            try {
+                val keys = floatKeys()
+                for (k in floats.keys.toList()) if (!keys.contains(k)) {
+                    try {
+                        wm.removeView(floats[k]!!.view)
+                    } catch (e: Exception) {
+                    }
+                    floats.remove(k)
+                }
+                for ((idx, k) in keys.withIndex()) {
+                    var fw = floats[k]
+                    if (fw == null) {
+                        val box = LinearLayout(this)
+                        box.orientation = LinearLayout.HORIZONTAL
+                        box.gravity = Gravity.CENTER_VERTICAL
+                        box.setPadding(dp(12), dp(8), dp(14), dp(8))
+                        if (k.startsWith("t:")) {
+                            box.addView(IconView(this, toggleIcons()[k.substring(2)] ?: "dice", Color.WHITE), LinearLayout.LayoutParams(dp(20), dp(20)))
+                        }
+                        val tv = TextView(this)
+                        tv.textSize = 13f
+                        tv.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        tv.setPadding(if (k.startsWith("t:")) dp(8) else 0, 0, 0, 0)
+                        box.addView(tv)
+                        val lp = WindowManager.LayoutParams(
+                            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                            PixelFormat.TRANSLUCENT
+                        )
+                        lp.gravity = Gravity.TOP or Gravity.START
+                        lp.x = prefs().getInt("fl_" + k + "_x", dp(8)).coerceIn(0, maxOf(0, screenW - dp(60)))
+                        lp.y = prefs().getInt("fl_" + k + "_y", (screenH * 0.22f).toInt() + idx * dp(48)).coerceIn(0, maxOf(0, screenH - dp(40)))
+                        makeDraggable(box, lp, "fl_" + k) {
+                            if (k.startsWith("t:")) {
+                                val key = k.substring(2)
+                                prefs().edit().putBoolean("cfg_" + key, !on(key)).apply()
+                                updateToggles()
+                            } else startPlanFloat(k.substring(2))
+                        }
+                        applyFont(box)
+                        wm.addView(box, lp)
+                        fw = FloatWin(k, box, lp, tv)
+                        floats[k] = fw
+                    }
+                    fw.label.text = floatLabel(k)
+                    val isOn = if (k.startsWith("t:")) on(k.substring(2)) else ((prefs().getString("profile_active", "") ?: "") == k.substring(2) && autoRunning)
+                    fw.view.background = if (isOn) card(0xEE241536.toInt(), 18, 0xFFB48AE0.toInt()) else card(0xEE16121C.toInt(), 18, 0xFF4A4358.toInt())
+                    fw.label.setTextColor(if (isOn) Color.WHITE else 0xFFB6B0C4.toInt())
+                    fw.view.alpha = if (isOn) 1f else 0.85f
+                }
+            } catch (e: Exception) {
+            }
+        }
+    }
+
+    private fun clearFloatWindows() {
+        for (f in floats.values) {
+            try {
+                wm.removeView(f.view)
+            } catch (e: Exception) {
+            }
+        }
+        floats.clear()
     }
 
     /** Tutamacı ve paneli konumlar: panel tutamacın bulunduğu tarafa göre soluna ya da sağına açılır. */
@@ -3733,8 +3896,8 @@ class TimerService : AccessibilityService() {
 
     /** Tüm panelde tek yazı tipi: kısık, ince çizgili sans. */
     private fun applyFont(v: View) {
-        if (curStyle == 2 && v is TextView && scaledViews.put(v, true) == null) {
-            v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, v.textSize * 1.12f)
+        if ((curStyle == 2 || curStyle == 3) && v is TextView && scaledViews.put(v, true) == null) {
+            v.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, v.textSize * (if (curStyle == 2) 1.12f else 1.08f))
         }
         if (v is TextView && v.tag != "serif") {
             val bold = v.typeface?.isBold == true
@@ -3768,6 +3931,7 @@ class TimerService : AccessibilityService() {
             val sh2 = dp(34)
             sl.x = (hx + hw - sw2).coerceIn(0, maxOf(0, screenW - sw2))
             sl.y = if (hy + hh + dp(4) + sh2 <= screenH) hy + hh + dp(4) else maxOf(0, hy - sh2 - dp(4))
+            dockSaved("stop", sl)
             try {
                 wm.updateViewLayout(sv2, sl)
             } catch (e: Exception) {
@@ -3778,6 +3942,7 @@ class TimerService : AccessibilityService() {
                 val below = sl.y > hy
                 dl.x = sl.x
                 dl.y = if (below) (if (sl.y + sh2 + dp(4) + sh2 <= screenH) sl.y + sh2 + dp(4) else maxOf(0, hy - sh2 - dp(4))) else maxOf(0, sl.y - sh2 - dp(4))
+                dockSaved("sc", dl)
                 try {
                     wm.updateViewLayout(dv, dl)
                 } catch (e: Exception) {
@@ -3787,6 +3952,7 @@ class TimerService : AccessibilityService() {
                 if (vl != null && vv != null) {
                     vl.x = dl.x
                     vl.y = if (below) minOf(dl.y + sh2 + dp(4), maxOf(0, screenH - sh2)) else maxOf(0, dl.y - sh2 - dp(4))
+                    dockSaved("sv", vl)
                     try {
                         wm.updateViewLayout(vv, vl)
                     } catch (e: Exception) {
@@ -3818,7 +3984,7 @@ class TimerService : AccessibilityService() {
         val outer = LinearLayout(this)
         outer.orientation = LinearLayout.VERTICAL
         outer.background = framed(PANEL_BG, 18)
-        if (!prefs().getBoolean("style3", false)) prefs().edit().putInt("uiStyle", 2).putBoolean("style3", true).apply()
+        if (!prefs().getBoolean("style4", false)) prefs().edit().putInt("uiStyle", 3).putBoolean("style4", true).putBoolean("style3", true).apply()
         val style = prefs().getInt("uiStyle", 0)
         curStyle = style
         val neo = style != 0
@@ -4025,11 +4191,22 @@ class TimerService : AccessibilityService() {
             rebuildUi()
         }
         tb.addView(themeBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
-        val styleBtn = mkBtn("Arayüz: " + arrayOf("Klasik", "Konsol", "Akış")[style] + "  ⇄") {
-            prefs().edit().putInt("uiStyle", (prefs().getInt("uiStyle", 0) + 1) % 3).apply()
+        val styleBtn = mkBtn("Arayüz: " + arrayOf("Klasik", "Konsol", "Akış", "Vitrin")[style] + "  ⇄") {
+            prefs().edit().putInt("uiStyle", (prefs().getInt("uiStyle", 0) + 1) % 4).apply()
             rebuildUi()
         }
         tb.addView(styleBtn, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
+        tb.addView(mkBtn("Düğme konumlarını sıfırla (Kaydet/Durdur/Kısayol)") {
+            val e = prefs().edit()
+            for (k in prefs().all.keys) if (k.startsWith("dk_")) e.remove(k)
+            e.apply()
+            placeBar()
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
+        tb.addView(mkBtn("Yüzen düğmeleri kaldır") {
+            prefs().edit().putString("floats", "").apply()
+            refreshFloats()
+            refreshHome()
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
         tb.addView(mkBtn("Sayacı sıfırla") { resetStats() }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36)).also { it.topMargin = dp(6) })
         boxMaintBtns.addView(r2, rlp)
         val boxMacro = sect(tabMaint, "KAYITLI İŞLEMLER (kaydedersen bot bunları oynatır)")
@@ -4511,6 +4688,76 @@ class TimerService : AccessibilityService() {
             flowPage = page
             flowTitle = pt
             outer.addView(stack, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.66f).toInt()).also { it.topMargin = dp(8) })
+        } else if (style == 3) {
+            // VİTRİN düzeni: geniş başlık, büyük eylem düğmeleri, tek satır sayaç, her şeyin olduğu Seçenekler ana sayfa, altta simgeli gezinme çubuğu
+            val top = LinearLayout(this)
+            top.orientation = LinearLayout.HORIZONTAL
+            top.gravity = Gravity.CENTER_VERTICAL
+            top.background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(0xFF2A1745.toInt(), 0xFF151021.toInt())).also {
+                it.cornerRadius = dp(14).toFloat()
+                it.setStroke(dp(1), 0xFF4B2C7A.toInt())
+            }
+            top.setPadding(dp(14), dp(10), dp(10), dp(10))
+            val tcol = LinearLayout(this)
+            tcol.orientation = LinearLayout.VERTICAL
+            val tt = TextView(this)
+            tt.text = "RICHINGEN"
+            tt.textSize = 18f
+            tt.letterSpacing = 0.14f
+            tt.tag = "serif"
+            tt.typeface = android.graphics.Typeface.SERIF
+            tt.setTextColor(0xFFD9C2F5.toInt())
+            tcol.addView(tt)
+            stats.textSize = 10.5f
+            stats.setTextColor(0xFFB6A6D0.toInt())
+            stats.setPadding(0, dp(2), 0, 0)
+            tcol.addView(stats)
+            top.addView(tcol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val pill = TextView(this)
+            pill.textSize = 11f
+            pill.typeface = android.graphics.Typeface.DEFAULT_BOLD
+            pill.setPadding(dp(10), dp(6), dp(10), dp(6))
+            neoPill = pill
+            top.addView(pill)
+            val back = mkBtn("⇄") {
+                prefs().edit().putInt("uiStyle", 0).apply()
+                rebuildUi()
+            }
+            back.textSize = 12f
+            top.addView(back, LinearLayout.LayoutParams(dp(36), dp(32)).also { it.leftMargin = dp(8) })
+            outer.addView(top)
+            for (i in 0 until mainRow.childCount) mainRow.getChildAt(i).layoutParams.height = dp(50)
+            mainRowLp.topMargin = dp(10)
+            outer.addView(mainRow, mainRowLp)
+            st.setPadding(dp(4), dp(8), dp(4), dp(6))
+            outer.addView(st)
+            val content = FrameLayout(this)
+            for (v in tabViews) content.addView(v, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            outer.addView(content, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (screenH * 0.5f).toInt()))
+            val nav = LinearLayout(this)
+            nav.orientation = LinearLayout.HORIZONTAL
+            nav.background = card(0xFF151021.toInt(), 16, 0xFF3A2A55.toInt())
+            nav.setPadding(dp(4), dp(4), dp(4), dp(4))
+            val navIcons = listOf("gem", "list", "skull", "target", "gear", "pen")
+            val navNames = listOf("Seçenekler", "Planlar", "Bosslar", "İşaret", "Bakım", "Araç")
+            for (k in navNames.indices) {
+                val item = LinearLayout(this)
+                item.orientation = LinearLayout.VERTICAL
+                item.gravity = Gravity.CENTER
+                item.setPadding(dp(2), dp(7), dp(2), dp(6))
+                item.addView(IconView(this, navIcons[k], Color.WHITE), LinearLayout.LayoutParams(dp(24), dp(24)))
+                val t = TextView(this)
+                t.text = navNames[k]
+                t.textSize = 9f
+                t.maxLines = 1
+                t.gravity = Gravity.CENTER
+                t.typeface = android.graphics.Typeface.DEFAULT_BOLD
+                item.addView(t, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(2) })
+                item.setOnClickListener { showTab(k) }
+                tabBtns.add(t)
+                nav.addView(item, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            }
+            outer.addView(nav, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.topMargin = dp(8) })
         } else {
             // KONSOL düzeni: üst çubuk (başlık, durum hapı), ana düğmeler, sayaç kutucukları, durum satırı, sol ray + içerik
             val top = LinearLayout(this)
@@ -4673,9 +4920,9 @@ class TimerService : AccessibilityService() {
         sw.setTextColor(Color.WHITE)
         sw.background = rounded(BAD, 12)
         sw.setPadding(dp(8), dp(6), dp(8), dp(6))
-        sw.setOnClickListener { stopJob() }
         val slp2 = overlayParams(dp(82))
         wm.addView(sw, slp2)
+        makeDraggable(sw, slp2, "dk_stop") { stopJob() }
         stopWin = sw
         stopLp = slp2
         applyFont(sw)
@@ -4689,9 +4936,9 @@ class TimerService : AccessibilityService() {
         kb.setTextColor(Color.WHITE)
         kb.background = card(onFill(), 12, ACCENT)
         kb.setPadding(dp(8), dp(6), dp(8), dp(6))
-        kb.setOnClickListener { toggleShortcuts() }
         val klp = overlayParams(dp(82))
         wm.addView(kb, klp)
+        makeDraggable(kb, klp, "dk_sc") { toggleShortcuts() }
         dockSc = kb
         dockScLp = klp
         applyFont(kb)
@@ -4705,9 +4952,9 @@ class TimerService : AccessibilityService() {
         kv.setTextColor(0xFF04200F.toInt())
         kv.background = rounded(OK, 12)
         kv.setPadding(dp(8), dp(6), dp(8), dp(6))
-        kv.setOnClickListener { runManual { doSave() } }
         val vlp = overlayParams(dp(82))
         wm.addView(kv, vlp)
+        makeDraggable(kv, vlp, "dk_sv") { runManual { doSave() } }
         dockSv = kv
         dockSvLp = vlp
         applyFont(kv)

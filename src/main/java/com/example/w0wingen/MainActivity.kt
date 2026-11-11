@@ -271,7 +271,7 @@ class MainActivity : Activity() {
 
         val look = card(col, "Görünüm")
         val lookHint = TextView(this)
-        lookHint.text = "Oyun üstündeki panelin düzeni. Klasik: dar panel, üstte sekmeler. Konsol: geniş panel, solda simge rayı. Akış: büyük başlat düğmesi, hızlı kutucuklar ve geri düğmeli sayfalar. Panelin başlığındaki ⇄ ile klasiğe dönebilirsin."
+        lookHint.text = "Oyun üstündeki panelin düzeni. Klasik: dar panel, üstte sekmeler. Konsol: geniş panel, solda simge rayı. Akış: büyük başlat düğmesi ve geri düğmeli sayfalar. Vitrin: tüm seçenekler ana sayfada, altta simgeli gezinme çubuğu. Panelin başlığındaki ⇄ ile klasiğe dönebilirsin."
         lookHint.textSize = 11f
         lookHint.setTextColor(DIM)
         look.addView(lookHint)
@@ -285,7 +285,7 @@ class MainActivity : Activity() {
                 b.setTextColor(if (i == cur) 0xFF04202D.toInt() else Color.WHITE)
             }
         }
-        for ((i, n) in listOf("Klasik", "Konsol", "Akış").withIndex()) {
+        for ((i, n) in listOf("Klasik", "Konsol", "Akış", "Vitrin").withIndex()) {
             val b = Button(this)
             b.text = n
             b.isAllCaps = false
